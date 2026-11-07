@@ -725,12 +725,24 @@ jobs:
                   return eff
               }
 
-              /** ID perangkat (dipakai server untuk membatasi jumlah HP per token). */
+              /**
+               * ID perangkat: DIACAK SEKALI di HP ini lalu tetap (tidak berubah walau APK di-update).
+               * Disimpan di data app dan di file token_rizky; kalau data app terhapus, ID lama dipulihkan dari file.
+               */
               fun deviceId(c: Context): String {
-                  val raw = Settings.Secure.getString(c.contentResolver, Settings.Secure.ANDROID_ID) ?: "x"
-                  val h = MessageDigest.getInstance("SHA-256").digest(("RZX|" + raw).toByteArray())
-                  val hex = h.joinToString("") { "%02X".format(it) }
-                  return hex.substring(0, 4) + "-" + hex.substring(4, 8)
+                  val p = sp(c)
+                  IdCfg.readDevice(c)?.let {
+                      if (p.getString("devid", "") != it) p.edit().putString("devid", it).apply()
+                      return it
+                  }
+                  val saved = p.getString("devid", "") ?: ""
+                  if (saved.matches(Regex("[0-9A-F]{4}-[0-9A-F]{4}"))) return saved
+                  val b = ByteArray(4)
+                  java.security.SecureRandom().nextBytes(b)
+                  val hex = b.joinToString("") { "%02X".format(it) }
+                  val id = hex.substring(0, 4) + "-" + hex.substring(4, 8)
+                  p.edit().putString("devid", id).apply()
+                  return id
               }
 
               /** Periksa token ke server. Panggil dari thread background. */
@@ -905,6 +917,20 @@ jobs:
                           }
                       }
                       if (tok.isNotEmpty() && (dev.isEmpty() || dev == Lock.deviceId(c))) tok else null
+                  } catch (e: Exception) {
+                      null
+                  }
+              }
+
+              /** ID device dari baris device= di token_rizky (kalau file bisa dibaca dan formatnya benar). */
+              fun readDevice(c: Context): String? {
+                  if (!canAccess(c)) return null
+                  return try {
+                      val f = file()
+                      if (!f.exists()) return null
+                      val d = f.readLines().map { it.trim() }.firstOrNull { it.startsWith("device=") }
+                          ?.substring(7)?.trim()?.uppercase() ?: return null
+                      if (d.matches(Regex("[0-9A-F]{4}-[0-9A-F]{4}"))) d else null
                   } catch (e: Exception) {
                       null
                   }
