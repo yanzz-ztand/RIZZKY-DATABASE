@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rizzxy Admin</title>
+<style>
+  :root { --bg:#0b0714; --card:#1a1030; --line:#4c2a7a; --txt:#ede9fe; --mut:#a59bc4; --acc:#a855f7; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:14px; background:var(--bg); color:var(--txt); font:14px system-ui,sans-serif; }
+  h1 { font-size:16px; letter-spacing:.08em; margin:0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:12px; }
+  input { width:100%; padding:10px; margin:4px 0; border-radius:10px; border:1px solid var(--line); background:#130b24; color:var(--txt); font-size:14px; }
+  .row { display:flex; gap:6px; } .row > * { flex:1; }
+  button { padding:9px 10px; border-radius:10px; border:1px solid var(--line); background:#3b1a66; color:var(--txt); font-weight:700; font-size:12px; }
+  button.main { background:var(--acc); color:#1e0b3a; width:100%; padding:11px; margin-top:6px; }
+  .tok { font-family:monospace; font-size:14px; font-weight:700; word-break:break-all; }
+  .meta { color:var(--mut); font-size:12px; margin:4px 0 8px; }
+  #msg { color:var(--mut); font-size:12px; min-height:16px; margin:4px 0; }
+</style>
+</head>
+<body>
+<h1>RIZZXY ADMIN</h1>
+
+<div class="card">
+  <input id="key" type="password" placeholder="Admin key" autocomplete="off">
+  <div class="row">
+    <input id="days" type="number" min="0" placeholder="Hari (0 = tanpa batas)">
+    <input id="dev" placeholder="ID perangkat (opsional)">
+  </div>
+  <input id="note" placeholder="Catatan (nama pembeli)">
+  <button class="main" onclick="make()">BUAT TOKEN</button>
+  <div id="msg"></div>
+</div>
+
+<div id="list"></div>
+
+<div class="meta">Riwayat hanya tersimpan di browser ini. Untuk mencabut token, tambahkan ID-nya ke env REVOKED di Vercel (pisah koma) lalu deploy ulang.</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+let hist = [];
+try { hist = JSON.parse(localStorage.getItem('rzx_hist') || '[]'); } catch (e) {}
+
+function fmt(ms) {
+  return ms ? new Date(ms).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : 'tanpa batas';
+}
+
+function render() {
+  $('list').innerHTML = hist.map((h, i) => `<div class="card">
+    <div class="tok">${esc(h.token)}</div>
+    <div class="meta">ID: ${esc(h.id)} · exp: ${fmt(h.exp)}${h.dev ? ' · HP: ' + esc(h.dev) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div>
+    <button onclick="copyTok(${i})">Salin</button>
+  </div>`).join('');
+}
+
+function copyTok(i) { navigator.clipboard.writeText(hist[i].token); $('msg').textContent = 'Disalin'; }
+
+async function make() {
+  const dev = $('dev').value.trim();
+  const r = await fetch('/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': $('key').value.trim() },
+    body: JSON.stringify({ days: $('days').value, device: dev }),
+  });
+  const j = await r.json().catch(() => ({ ok: false, reason: 'Respons tidak valid' }));
+  if (!j.ok) { $('msg').textContent = j.reason; return; }
+  hist.unshift({ token: j.token, id: j.id, exp: j.exp, dev, note: $('note').value.trim() });
+  hist = hist.slice(0, 100);
+  try { localStorage.setItem('rzx_hist', JSON.stringify(hist)); } catch (e) {}
+  $('msg').textContent = 'Token dibuat';
+  render();
+}
+render();
+</script>
+</body>
+</html>
