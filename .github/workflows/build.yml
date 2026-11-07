@@ -609,6 +609,9 @@ jobs:
               fun setNickGapMs(c: Context, v: Int) = sp(c).edit().putInt("nick.gap", v).apply()
               fun nickAfter(c: Context): Int = sp(c).getInt("nick.after", DEF_NICK_AFTER)
               fun setNickAfter(c: Context, v: Int) = sp(c).edit().putInt("nick.after", v).apply()
+              /** Nickname jalan setelah RUN berapa: 1 atau 2 (default 2). */
+              fun nickRun(c: Context): Int = sp(c).getInt("nick.run", 2).coerceIn(1, 2)
+              fun setNickRun(c: Context, v: Int) = sp(c).edit().putInt("nick.run", v.coerceIn(1, 2)).apply()
               fun nickFlow(c: Context): String = sp(c).getString("nick.flow", DEF_NICK_FLOW) ?: DEF_NICK_FLOW
               fun setNickFlow(c: Context, v: String) = sp(c).edit().putString("nick.flow", v.trim()).apply()
               fun nickRFlow(c: Context): String = sp(c).getString("nick.rflow", DEF_NICK_RFLOW) ?: DEF_NICK_RFLOW
@@ -697,7 +700,16 @@ jobs:
               private const val RECHECK_MS = 5L * 60_000L
 
               /** net = true berarti gagal karena jaringan/server (bukan penolakan token). */
-              class Result(val ok: Boolean, val exp: Long = 0L, val reason: String = "", val net: Boolean = false)
+              class Result(
+                  val ok: Boolean,
+                  val exp: Long = 0L,
+                  val reason: String = "",
+                  val net: Boolean = false,
+                  val id: String = "",
+                  val name: String = ""
+              )
+
+              private fun clean(s: String): String = if (s == "null") "" else s.trim()
 
               private fun sp(c: Context) = c.getSharedPreferences("lock", Context.MODE_PRIVATE)
 
@@ -737,7 +749,7 @@ jobs:
                       if (j == null) {
                           Result(false, reason = "Server tidak merespons dengan benar ($code)", net = true)
                       } else if (j.optBoolean("ok")) {
-                          Result(true, j.optLong("exp", 0L))
+                          Result(true, j.optLong("exp", 0L), id = clean(j.optString("id", "")), name = clean(j.optString("name", "")))
                       } else {
                           Result(false, reason = j.optString("reason", "Token ditolak"), net = j.optBoolean("temp", false))
                       }
@@ -771,17 +783,33 @@ jobs:
               }
 
               /** Simpan token yang sudah terverifikasi. */
-              fun save(c: Context, token: String, exp: Long) {
+              fun save(c: Context, token: String, exp: Long, id: String = "", name: String = "") {
                   val now = nowMs(c)
                   sp(c).edit()
                       .putBoolean("ok", true)
                       .putString("token", token.trim())
+                      .putString("id", id)
+                      .putString("name", name)
                       .putLong("exp", exp)
                       .putLong("lastOk", now)
                       .putLong("checked", now)
                       .remove("note")
                       .apply()
               }
+
+              /** ID token untuk ditampilkan: dari server kalau ada, kalau tidak 8 huruf pertama token. */
+              fun tokenId(c: Context): String {
+                  val p = sp(c)
+                  val id = p.getString("id", "") ?: ""
+                  if (id.isNotEmpty()) return id.uppercase()
+                  val t = (p.getString("token", "") ?: "").trim()
+                  if (t.isEmpty()) return "-"
+                  return (if (t.length <= 10) t else t.substring(0, 8)).uppercase()
+              }
+
+              fun expMs(c: Context): Long = sp(c).getLong("exp", 0L)
+
+              fun serverName(c: Context): String = sp(c).getString("name", "") ?: ""
 
               /** Pesan alasan terkunci (sekali pakai), atau string kosong. */
               fun takeNote(c: Context): String {
@@ -806,7 +834,10 @@ jobs:
                   Thread {
                       val r = verify(c, token)
                       if (r.ok) {
-                          sp(c).edit().putLong("exp", r.exp).putLong("lastOk", nowMs(c)).apply()
+                          val e = sp(c).edit().putLong("exp", r.exp).putLong("lastOk", nowMs(c))
+                          if (r.id.isNotEmpty()) e.putString("id", r.id)
+                          if (r.name.isNotEmpty()) e.putString("name", r.name)
+                          e.apply()
                       } else if (!r.net) {
                           lockOut(sp(c), r.reason)
                           onLocked()
@@ -911,6 +942,10 @@ jobs:
               private lateinit var rootGroup: LinearLayout
               private val modeBtns = mutableListOf<Button>()
               private lateinit var adbMainBtn: Button
+              private lateinit var profAvatar: ImageView
+              private lateinit var profName: TextView
+              private lateinit var profDev: TextView
+              private lateinit var profTok: TextView
               private var settingsStatus: TextView? = null
               private var settingsBtn: Button? = null
               private var autoDone = false
@@ -926,6 +961,7 @@ jobs:
                   admin = ComponentName(this, AdminReceiver::class.java)
                   val ui = buildUi()
                   setContentView(ui)
+                  refreshProfile(true)
                   if (!Lock.isUnlocked(this)) {
                       ui.visibility = View.INVISIBLE
                       showLock(ui)
@@ -979,7 +1015,8 @@ jobs:
                                   btn.isEnabled = true
                                   btn.text = "MASUK"
                                   if (r.ok) {
-                                      Lock.save(this, token, r.exp)
+                                      Lock.save(this, token, r.exp, r.id, r.name)
+                                      refreshProfile()
                                       lockShown = false
                                       ui.visibility = View.VISIBLE
                                       d.dismiss()
@@ -1013,6 +1050,7 @@ jobs:
                   }
                   if (!lockShown) Lock.revalidate(this) { runOnUiThread { recreate() } }
                   videoBg?.resumePlayback()
+                  refreshProfile()
                   if (::banner.isInitialized) refresh()
               }
 
@@ -1227,6 +1265,34 @@ jobs:
                   titleRow.addView(iconBtn(R.drawable.ic_settings, green) { openSettings() })
                   headCard.addView(titleRow)
 
+                  // kartu profil: gambar (bisa diganti), nama, HP asli, ID token + masa aktif
+                  val profRow = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                      background = shape(cardDark, 14, 1, Theme.t(0xFF24173D.toInt()))
+                      setPadding(dp(10), dp(10), dp(12), dp(10))
+                      setOnClickListener { openProfileMenu() }
+                  }
+                  profAvatar = ImageView(this).apply {
+                      scaleType = ImageView.ScaleType.CENTER_CROP
+                      outlineProvider = object : android.view.ViewOutlineProvider() {
+                          override fun getOutline(v: View, o: android.graphics.Outline) {
+                              o.setRoundRect(0, 0, v.width, v.height, dp(14).toFloat())
+                          }
+                      }
+                      clipToOutline = true
+                  }
+                  profRow.addView(profAvatar, LinearLayout.LayoutParams(dp(54), dp(54)))
+                  val profCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                  profName = tv("", 15f, white, true).apply { setSingleLine(); letterSpacing = 0.05f }
+                  profDev = tv("", 10f, muted, true).apply { maxLines = 2 }
+                  profTok = tv("", 10f, cyan, true).apply { maxLines = 2 }
+                  profCol.addView(profName)
+                  profCol.addView(profDev)
+                  profCol.addView(profTok)
+                  profRow.addView(profCol, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
+                  headCard.addView(profRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
+
                   val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                   listOf("NORMAL", "ADVANCE", "DATA", "ADB/ROOT").forEachIndexed { i, name ->
                       val b = mkBtn(name) { tab = i; refresh() }
@@ -1289,7 +1355,7 @@ jobs:
                   autoCard.addView(autoTexts, LinearLayout.LayoutParams(0, -2, 1f).apply {
                       leftMargin = dp(12); rightMargin = dp(8)
                   })
-                  autoCard.addView(softBtn("START", R.drawable.ic_play) { startRun() })
+                  autoCard.addView(softBtn("START") { startRun() })
                   serverPane.addView(autoCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
 
                   serverPane.addView(colorBtn("CLOSE APK", 0xFF7F1D1D.toInt()) { closeRun() },
@@ -1394,6 +1460,7 @@ jobs:
               }
 
               private val REQ_WALL = 77
+              private val REQ_AVATAR = 78
 
               private fun toggleMute() {
                   Theme.setMuted(this, !Theme.muted)
@@ -1479,9 +1546,65 @@ jobs:
                   dlg.window?.setLayout((resources.displayMetrics.widthPixels * 0.94).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
               }
 
+              private fun refreshProfile(reloadImg: Boolean = false) {
+                  if (!::profName.isInitialized) return
+                  profName.text = Profile.name(this).uppercase()
+                  profDev.text = "Device Real : " + Profile.deviceReal() + " · HP : " + Lock.deviceId(this)
+                  profTok.text = "ID : " + Lock.tokenId(this) + " · EXP : " + Profile.expText(Lock.expMs(this))
+                  if (reloadImg) {
+                      val bm = Profile.loadAvatar(this)
+                      if (bm != null) profAvatar.setImageBitmap(bm) else profAvatar.setImageResource(R.mipmap.ic_launcher)
+                  }
+              }
+
+              private fun openProfileMenu() {
+                  AlertDialog.Builder(this)
+                      .setTitle("PROFIL")
+                      .setItems(arrayOf("Ganti gambar profil", "Hapus gambar profil", "Ubah nama")) { _, which ->
+                          when (which) {
+                              0 -> {
+                                  val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                      addCategory(Intent.CATEGORY_OPENABLE)
+                                      type = "image/*"
+                                  }
+                                  try { startActivityForResult(i, REQ_AVATAR) } catch (e: Exception) { toast("Galeri tidak tersedia") }
+                              }
+                              1 -> { Profile.clearAvatar(this); refreshProfile(true) }
+                              else -> {
+                                  val et = field("NAMA", false)
+                                  et.setText(Profile.name(this))
+                                  val wrap = LinearLayout(this).apply {
+                                      setPadding(dp(20), dp(8), dp(20), 0)
+                                      addView(et, LinearLayout.LayoutParams(-1, -2))
+                                  }
+                                  AlertDialog.Builder(this)
+                                      .setTitle("UBAH NAMA")
+                                      .setView(wrap)
+                                      .setNegativeButton("BATAL", null)
+                                      .setPositiveButton("SIMPAN") { _, _ ->
+                                          Profile.setName(this, et.text.toString())
+                                          refreshProfile()
+                                      }
+                                      .show()
+                              }
+                          }
+                      }
+                      .setNegativeButton("TUTUP", null)
+                      .show()
+              }
+
               @Deprecated("Deprecated in Java")
               override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
                   super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == REQ_AVATAR) {
+                      if (resultCode != RESULT_OK) return
+                      val au = data?.data ?: return
+                      Thread {
+                          val ok = Profile.saveAvatar(this, au)
+                          runOnUiThread { if (ok) refreshProfile(true) else toast("Gagal memuat gambar") }
+                      }.start()
+                      return
+                  }
                   if (requestCode != REQ_WALL || resultCode != RESULT_OK) return
                   val uri = data?.data ?: return
                   val isVideo = (contentResolver.getType(uri) ?: "").startsWith("video/")
@@ -1729,6 +1852,7 @@ jobs:
                   var d2 = Cfg.getInt(this, "$t.d2", if (t == "gift") Cfg.GIFT_D2 else Cfg.DEF_D2).coerceIn(2, 120)
                   var closeEnd = Cfg.getInt(this, "$t.closeEnd", 0) == 1
                   var nMode = Cfg.nickMode(this)
+                  var nRun = Cfg.nickRun(this)
                   var nPre = Cfg.nickPre(this)
                   var nGap = Cfg.nickGapMs(this)
                   var nAfter = Cfg.nickAfter(this)
@@ -1744,6 +1868,7 @@ jobs:
                       Cfg.setInt(this, "$t.d2", d2)
                       Cfg.setInt(this, "$t.closeEnd", if (closeEnd) 1 else 0)
                       Cfg.setNickMode(this, nMode)
+                      Cfg.setNickRun(this, nRun)
                       Cfg.setNickPre(this, nPre)
                       Cfg.setNickGapMs(this, nGap)
                       Cfg.setNickAfter(this, nAfter)
@@ -1774,7 +1899,6 @@ jobs:
                   topTexts.addView(tv("SEQUENCE CONFIGURATION", 10f, muted))
                   top.addView(topTexts, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
                   val defBtn = tv("DEFAULT", 11f, white, true).apply {
-                      text = Icons.label(this@MainActivity, R.drawable.ic_reset, "DEFAULT", white, 12)
                       gravity = Gravity.CENTER
                       setPadding(dp(12), dp(10), dp(12), dp(10))
                       background = shape(cardDark, 12, 1, line)
@@ -1872,7 +1996,7 @@ jobs:
                   )
 
                   // 2B. nickname otomatis (RUN 2)
-                  box.addView(label("2B. NICKNAME OTOMATIS (SETELAH RUN 2 SELESAI):"))
+                  box.addView(label("2B. NICKNAME OTOMATIS:"))
                   val nickBox = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = shape(cardDark, 16, 1, Theme.t(0xFF24173D.toInt()))
@@ -1886,6 +2010,15 @@ jobs:
                       }
                   }
                   nickBox.addView(modeRow)
+                  val runLbl = tv("JALANKAN SETELAH:", 10f, muted, true).apply { setPadding(dp(2), dp(12), 0, dp(6)) }
+                  nickBox.addView(runLbl)
+                  val runRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                  val runChips = listOf("RUN 1", "RUN 2").mapIndexed { i, nm ->
+                      chip(nm) { nRun = i + 1; renderAll() }.also {
+                          runRow.addView(it, LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+                      }
+                  }
+                  nickBox.addView(runRow)
                   val nickHint = tv("", 10f, muted).apply { setPadding(dp(2), dp(8), dp(2), dp(4)) }
                   nickBox.addView(nickHint)
 
@@ -1945,12 +2078,16 @@ jobs:
 
                   renders.add {
                       modeChips.forEachIndexed { i, c -> styleChip(c, i == nMode) }
+                      runChips.forEachIndexed { i, c -> styleChip(c, i + 1 == nRun) }
+                      runLbl.visibility = if (nMode == 0) View.GONE else View.VISIBLE
+                      runRow.visibility = if (nMode == 0) View.GONE else View.VISIBLE
                       reqBox.visibility = if (nMode == 2) View.VISIBLE else View.GONE
                       timeBox.visibility = if (nMode == 0) View.GONE else View.VISIBLE
+                      val whenTxt = if (nRun == 1) "RUN 1 selesai (sebelum RUN 2)" else "RUN 2 selesai"
                       nickHint.text = when {
                           nMode == 0 -> "Mati. Server hanya dibuka: RUN 1 lalu RUN 2."
-                          nMode == 1 -> "RUN 1 buka semua apk, RUN 2 buka semua sekali lagi sampai kelar. Baru setelah itu nick jalan: di tiap apk ketuk-ketuk sesuai alur RANDOM."
-                          else -> "RUN 1 buka semua apk, RUN 2 buka semua sekali lagi sampai kelar. Baru setelah itu nick jalan: di tiap apk nick disalin ke clipboard lalu alur REQUEST (pilih kolom, paste, OK, skip)."
+                          nMode == 1 -> "Nick jalan setelah $whenTxt: di tiap apk ketuk-ketuk sesuai alur RANDOM."
+                          else -> "Nick jalan setelah $whenTxt: di tiap apk nick disalin ke clipboard lalu alur REQUEST (pilih kolom, paste, OK, skip)."
                       }
                   }
 
@@ -2007,7 +2144,6 @@ jobs:
                       setOnClickListener { save(); dlg?.dismiss() }
                   }
                   val startBtn = tv("START", 14f, Theme.t(0xFF1E0B3A.toInt()), true).apply {
-                      text = Icons.label(this@MainActivity, R.drawable.ic_play, "START", Theme.t(0xFF1E0B3A.toInt()), 16)
                       gravity = Gravity.CENTER
                       background = shape(cyan, 16)
                       setOnClickListener { save(); dlg?.dismiss(); startRun() }
@@ -2593,7 +2729,7 @@ jobs:
                       inner.addView(names, LinearLayout.LayoutParams(0, -2, 1f).apply {
                           leftMargin = dp(14); rightMargin = dp(8)
                       })
-                      inner.addView(softBtn("OPEN", R.drawable.ic_play) { openOne(row.pkg) })
+                      inner.addView(softBtn("OPEN") { openOne(row.pkg) })
 
                       return LinearLayout(this@MainActivity).apply {
                           setPadding(0, dp(4), 0, dp(4))
@@ -3076,7 +3212,7 @@ jobs:
           import android.widget.ProgressBar
           import android.widget.TextView
 
-          /** RUN 1: buka semua server satu per satu. RUN 2: buka semua sekali lagi sampai kelar. Nick (kalau aktif) baru jalan SETELAH RUN 2 selesai. Ada PAUSE/PLAY dan STOP. */
+          /** RUN 1: buka semua server satu per satu. RUN 2: buka semua sekali lagi sampai kelar. Nick (kalau aktif) jalan setelah RUN 1 ATAU RUN 2 (pilihan di AUTO TASK). Ada PAUSE/PLAY dan STOP. */
           class RunService : Service() {
 
               companion object {
@@ -3148,37 +3284,13 @@ jobs:
                   // NICK (kalau aktif): baru jalan setelah RUN 2 selesai, lalu per server isi nick.
                   val total = pkgs.size
                   val nickMode = Cfg.nickMode(this)
+                  val nickRun = Cfg.nickRun(this)
                   val opened = ArrayList<String>()
                   var step = 0
-                  loop1@ for (p in pkgs) {
-                      if (!waitIfPaused()) break@loop1
-                      step++
-                      setTitle("[RUN 1] ${step}/${total}", step * 100 / total)
-                      log("RUN 1 OPEN $p (${d1}s)")
-                      if (!open(p, act)) {
-                          log("SKIP $p (tidak ada activity)")
-                          continue
-                      }
-                      opened.add(p)
-                      if (!sleepMs(d1 * 1000L)) break@loop1
-                  }
-                  val delay2 = d2.coerceAtLeast(2)
-                  if (!stopFlag && opened.isNotEmpty()) {
-                      var s2 = 0
-                      loop2@ for (p in opened) {
-                          if (!waitIfPaused()) break@loop2
-                          s2++
-                          setTitle("[RUN 2] ${s2}/${opened.size}", s2 * 100 / opened.size)
-                          log("RUN 2 OPEN $p (${delay2}s)")
-                          if (!open(p, act)) {
-                              log("SKIP $p")
-                              continue
-                          }
-                          if (!sleepMs(delay2 * 1000L)) break@loop2
-                      }
-                  }
-                  // stopFlag hanya false di sini kalau RUN 2 benar-benar sampai kelar
-                  if (!stopFlag && nickMode != NickAuto.MODE_OFF && opened.isNotEmpty()) {
+
+                  // Fase nick: per server buka apk lalu isi nick. Dipanggil setelah RUN 1 atau RUN 2.
+                  fun nickPhase() {
+                      if (stopFlag || nickMode == NickAuto.MODE_OFF || opened.isEmpty()) return
                       var nickNo = Cfg.nickStart(this)
                       var n = 0
                       nick@ for (p in opened) {
@@ -3198,6 +3310,38 @@ jobs:
                           nickNo++
                       }
                   }
+                  loop1@ for (p in pkgs) {
+                      if (!waitIfPaused()) break@loop1
+                      step++
+                      setTitle("[RUN 1] ${step}/${total}", step * 100 / total)
+                      log("RUN 1 OPEN $p (${d1}s)")
+                      if (!open(p, act)) {
+                          log("SKIP $p (tidak ada activity)")
+                          continue
+                      }
+                      opened.add(p)
+                      if (!sleepMs(d1 * 1000L)) break@loop1
+                  }
+                  // nick setelah RUN 1 (sebelum RUN 2), kalau dipilih
+                  if (nickRun == 1) nickPhase()
+                  val delay2 = d2.coerceAtLeast(2)
+                  if (!stopFlag && opened.isNotEmpty()) {
+                      var s2 = 0
+                      loop2@ for (p in opened) {
+                          if (!waitIfPaused()) break@loop2
+                          s2++
+                          setTitle("[RUN 2] ${s2}/${opened.size}", s2 * 100 / opened.size)
+                          log("RUN 2 OPEN $p (${delay2}s)")
+                          if (!open(p, act)) {
+                              log("SKIP $p")
+                              continue
+                          }
+                          if (!sleepMs(delay2 * 1000L)) break@loop2
+                      }
+                  }
+                  // stopFlag hanya false di sini kalau RUN 2 benar-benar sampai kelar
+                  if (nickRun == 2) nickPhase()
+
                   if (!stopFlag && closeEnd) {
                       pkgs.forEach { kill(it) }
                       log("CLOSE ${pkgs.size} server")
@@ -3886,6 +4030,83 @@ jobs:
                   android:fillColor="#FFFFFFFF"
                   android:pathData="M19,5v14H5V5h14m0,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2V5c0,-1.1 -0.9,-2 -2,-2z" />
           </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/Profile.kt')"
+          cat > 'app/src/main/java/com/rizzxy/store/Profile.kt' <<'RZX_EOF'
+          package com.rizzxy.store
+
+          import android.content.Context
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
+          import android.net.Uri
+          import android.os.Build
+          import java.io.File
+          import java.io.FileOutputStream
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+
+          /** Profil di header: nama, gambar profil custom, info HP dan token. */
+          object Profile {
+              private fun sp(c: Context) = c.getSharedPreferences("profile", Context.MODE_PRIVATE)
+
+              private fun avatarFile(c: Context) = File(c.filesDir, "avatar.png")
+
+              /** Nama buatan sendiri, kalau kosong pakai nama dari server, kalau kosong lagi "USER". */
+              fun name(c: Context): String {
+                  val own = sp(c).getString("name", "") ?: ""
+                  if (own.isNotBlank()) return own
+                  val srv = Lock.serverName(c)
+                  return if (srv.isNotBlank()) srv else "USER"
+              }
+
+              fun setName(c: Context, v: String) = sp(c).edit().putString("name", v.trim()).apply()
+
+              /** Model HP asli yang terdeteksi. */
+              fun deviceReal(): String {
+                  val m = Build.MODEL ?: ""
+                  return if (m.isNotBlank()) m.trim() else (Build.DEVICE ?: "?")
+              }
+
+              fun expText(exp: Long): String {
+                  if (exp <= 0L) return "TANPA BATAS"
+                  val now = System.currentTimeMillis()
+                  val d = SimpleDateFormat("dd MMM yyyy", Locale("id", "ID")).format(Date(exp))
+                  if (exp < now) return d + " (habis)"
+                  val left = (exp - now) / 86_400_000L + 1
+                  return d + " (" + left + " hari)"
+              }
+
+              fun loadAvatar(c: Context): Bitmap? {
+                  val f = avatarFile(c)
+                  if (!f.exists()) return null
+                  return try { BitmapFactory.decodeFile(f.absolutePath) } catch (e: Throwable) { null }
+              }
+
+              fun clearAvatar(c: Context) {
+                  try { avatarFile(c).delete() } catch (e: Throwable) {}
+              }
+
+              /** Simpan gambar pilihan jadi kotak 512px (dipotong tengah). Panggil dari thread background. */
+              fun saveAvatar(c: Context, uri: Uri): Boolean {
+                  return try {
+                      val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                      c.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                      var s = 1
+                      while (bounds.outWidth / s > 1024 || bounds.outHeight / s > 1024) s *= 2
+                      val opts = BitmapFactory.Options().apply { inSampleSize = s }
+                      val bmp = c.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+                          ?: return false
+                      val side = minOf(bmp.width, bmp.height)
+                      val sq = Bitmap.createBitmap(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side)
+                      val out = if (side > 512) Bitmap.createScaledBitmap(sq, 512, 512, true) else sq
+                      FileOutputStream(avatarFile(c)).use { out.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                      true
+                  } catch (e: Throwable) {
+                      false
+                  }
+              }
+          }
           RZX_EOF
           mkdir -p "$(dirname 'app/src/main/res/values/strings.xml')"
           cat > 'app/src/main/res/values/strings.xml' <<'RZX_EOF'
