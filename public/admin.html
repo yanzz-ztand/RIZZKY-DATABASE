@@ -17,6 +17,9 @@
   button.main { background:var(--acc); color:#1e0b3a; width:100%; padding:11px; margin-top:6px; }
   .tok { font-family:monospace; font-size:14px; font-weight:700; word-break:break-all; }
   .meta { color:var(--mut); font-size:12px; margin:4px 0 8px; }
+  button.del { background:#4a1020; border-color:#8a2a45; margin-left:6px; }
+  .btns { display:flex; gap:6px; }
+  .btns button { flex:0 0 auto; }
   #msg { color:var(--mut); font-size:12px; min-height:16px; margin:4px 0; }
 </style>
 </head>
@@ -36,13 +39,20 @@
 
 <div id="list"></div>
 
-<div class="meta">Riwayat hanya tersimpan di browser ini. Untuk mencabut token, tambahkan ID-nya ke env REVOKED di Vercel (pisah koma) lalu deploy ulang.</div>
+<div id="rev"></div>
+
+<div class="meta">Riwayat hanya tersimpan di browser ini. Tombol Hapus membuang token dari riwayat dan memasukkan ID-nya ke daftar REVOKED di bawah. Agar token benar-benar mati, tempel daftar itu ke env REVOKED di Vercel lalu deploy ulang.</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
 let hist = [];
 try { hist = JSON.parse(localStorage.getItem('rzx_hist') || '[]'); } catch (e) {}
+let rev = [];
+try { rev = JSON.parse(localStorage.getItem('rzx_rev') || '[]'); } catch (e) {}
+function save() {
+  try { localStorage.setItem('rzx_hist', JSON.stringify(hist)); localStorage.setItem('rzx_rev', JSON.stringify(rev)); } catch (e) {}
+}
 
 function fmt(ms) {
   return ms ? new Date(ms).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : 'tanpa batas';
@@ -52,9 +62,31 @@ function render() {
   $('list').innerHTML = hist.map((h, i) => `<div class="card">
     <div class="tok">${esc(h.token)}</div>
     <div class="meta">ID: ${esc(h.id)} · exp: ${fmt(h.exp)}${h.dev ? ' · HP: ' + esc(h.dev) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div>
-    <button onclick="copyTok(${i})">Salin</button>
+    <div class="btns"><button onclick="copyTok(${i})">Salin</button><button class="del" onclick="del(${i})">Hapus</button></div>
   </div>`).join('');
+  renderRev();
 }
+
+function renderRev() {
+  $('rev').innerHTML = rev.length ? `<div class="card">
+    <div class="meta">REVOKED (tempel ke env Vercel, lalu deploy ulang)</div>
+    <div class="tok">${esc(rev.join(','))}</div>
+    <div class="btns" style="margin-top:8px"><button onclick="copyRev()">Salin daftar</button><button class="del" onclick="clearRev()">Kosongkan</button></div>
+  </div>` : '';
+}
+
+function del(i) {
+  const h = hist[i];
+  if (!h || !confirm('Hapus token ' + h.id + '? ID-nya masuk daftar REVOKED.')) return;
+  hist.splice(i, 1);
+  if (!rev.includes(h.id)) rev.push(h.id);
+  save();
+  $('msg').textContent = 'Dihapus. Tempel daftar REVOKED ke Vercel agar token mati.';
+  render();
+}
+
+function copyRev() { navigator.clipboard.writeText(rev.join(',')); $('msg').textContent = 'Daftar REVOKED disalin'; }
+function clearRev() { if (confirm('Kosongkan daftar REVOKED di browser ini?')) { rev = []; save(); render(); } }
 
 function copyTok(i) { navigator.clipboard.writeText(hist[i].token); $('msg').textContent = 'Disalin'; }
 
@@ -68,8 +100,7 @@ async function make() {
   const j = await r.json().catch(() => ({ ok: false, reason: 'Respons tidak valid' }));
   if (!j.ok) { $('msg').textContent = j.reason; return; }
   hist.unshift({ token: j.token, id: j.id, exp: j.exp, dev, note: $('note').value.trim() });
-  hist = hist.slice(0, 100);
-  try { localStorage.setItem('rzx_hist', JSON.stringify(hist)); } catch (e) {}
+  save();
   $('msg').textContent = 'Token dibuat';
   render();
 }
