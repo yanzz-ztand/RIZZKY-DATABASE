@@ -560,7 +560,7 @@ jobs:
               const val DEF_D2 = 10
               const val GIFT_COUNT = 10
               const val GIFT_D1 = 3
-              const val GIFT_D2 = 0
+              const val GIFT_D2 = 3
               const val GIFT_ACT = "com.moba.unityplugin.MobaGameMainMainActivity"
 
               // prefix, suffix, extras
@@ -635,6 +635,13 @@ jobs:
 
               fun setInt(c: Context, key: String, v: Int) {
                   sp(c).edit().putInt(key, v).apply()
+              }
+
+              /** Kembalikan awalan/akhiran/tambahan/activity ke bawaan (pengaturan lain tidak disentuh). */
+              fun resetPackages(c: Context) {
+                  val e = sp(c).edit()
+                  for (t in defaults.keys) for (f in arrayOf("prefix", "suffix", "extras", "act")) e.remove("$t.$f")
+                  e.apply()
               }
 
               fun reset(c: Context) {
@@ -903,6 +910,11 @@ jobs:
               private lateinit var adbGroup: LinearLayout
               private lateinit var rootGroup: LinearLayout
               private val modeBtns = mutableListOf<Button>()
+              private lateinit var adbMainBtn: Button
+              private var settingsStatus: TextView? = null
+              private var settingsBtn: Button? = null
+              private var autoDone = false
+              private var notifAsked = false
               private lateinit var adbLog: TextView
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -1122,14 +1134,23 @@ jobs:
                   return b
               }
 
-              private fun iconBtn(glyph: String, color: Int, onClick: () -> Unit) = tv(glyph, 22f, color, true).apply {
-                  gravity = Gravity.CENTER
-                  setPadding(dp(10), dp(6), dp(10), dp(6))
+              /** Ikon vector (drawable) yang diwarnai lewat kode, bukan emoji/teks. */
+              private fun vecIcon(res: Int, color: Int, padDp: Int = 0) = ImageView(this).apply {
+                  setImageResource(res)
+                  setColorFilter(color)
+                  scaleType = ImageView.ScaleType.FIT_CENTER
+                  setPadding(dp(padDp), dp(padDp), dp(padDp), dp(padDp))
+              }
+
+              /** Tombol ikon header: semua ukurannya sama (40dp, ikon 22dp). */
+              private fun iconBtn(res: Int, color: Int, onClick: () -> Unit) = vecIcon(res, color, 9).apply {
+                  layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
                   setOnClickListener { onClick() }
               }
 
               /** Tombol kecil bergaya "OPEN"/"START". */
-              private fun softBtn(text: String, onClick: () -> Unit) = tv(text, 12f, green, true).apply {
+              private fun softBtn(text: String, icon: Int = 0, onClick: () -> Unit) = tv(text, 12f, green, true).apply {
+                  if (icon != 0) setText(Icons.label(this@MainActivity, icon, text, green))
                   gravity = Gravity.CENTER
                   setPadding(dp(16), dp(11), dp(16), dp(11))
                   background = shape(btnBg, 12, 1, btnLine)
@@ -1191,23 +1212,19 @@ jobs:
                       setOnLongClickListener { confirmReleaseOwner(); true }
                   }
                   titleRow.addView(title, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(10) })
-                  titleRow.addView(iconBtn("↻", cyan) {
+                  titleRow.addView(iconBtn(R.drawable.ic_refresh, cyan) {
                       loadAppsAsync { refresh(); toast("Daftar aplikasi dimuat ulang") }
                   })
                   if (Theme.hasVideo) {
-                      val snd = ImageView(this).apply {
-                          setImageResource(if (Theme.muted) R.drawable.ic_vol_off else R.drawable.ic_vol_on)
-                          setColorFilter(green)
-                          scaleType = ImageView.ScaleType.CENTER
-                      }
+                      val snd = iconBtn(if (Theme.muted) R.drawable.ic_vol_off else R.drawable.ic_vol_on, green) {}
                       snd.setOnClickListener {
                           toggleMute()
                           snd.setImageResource(if (Theme.muted) R.drawable.ic_vol_off else R.drawable.ic_vol_on)
                       }
-                      titleRow.addView(snd, LinearLayout.LayoutParams(dp(44), dp(36)))
+                      titleRow.addView(snd)
                   }
-                  titleRow.addView(iconBtn("◐", green) { openTheme() })
-                  titleRow.addView(iconBtn("⚙\uFE0E", green) { openSettings() })
+                  titleRow.addView(iconBtn(R.drawable.ic_theme, green) { openTheme() })
+                  titleRow.addView(iconBtn(R.drawable.ic_settings, green) { openSettings() })
                   headCard.addView(titleRow)
 
                   val tabRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1261,8 +1278,7 @@ jobs:
                       setPadding(dp(12), dp(12), dp(12), dp(12))
                       setOnClickListener { openAuto() }
                   }
-                  val autoIcon = tv("⇅", 20f, cyan, true).apply {
-                      gravity = Gravity.CENTER
+                  val autoIcon = vecIcon(R.drawable.ic_swap, cyan, 10).apply {
                       background = shape(cardDark, 12, 1, line)
                   }
                   autoCard.addView(autoIcon, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -1273,7 +1289,7 @@ jobs:
                   autoCard.addView(autoTexts, LinearLayout.LayoutParams(0, -2, 1f).apply {
                       leftMargin = dp(12); rightMargin = dp(8)
                   })
-                  autoCard.addView(softBtn("▶ START") { startRun() })
+                  autoCard.addView(softBtn("START", R.drawable.ic_play) { startRun() })
                   serverPane.addView(autoCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
 
                   serverPane.addView(colorBtn("CLOSE APK", 0xFF7F1D1D.toInt()) { closeRun() },
@@ -1497,7 +1513,10 @@ jobs:
                   dataPane.visibility = if (tab == 2) View.VISIBLE else View.GONE
                   adbPane.visibility = if (tab == 3) View.VISIBLE else View.GONE
                   if (tab == 0 || tab == 1 || tab == 4) loadServerTab()
-                  if (tab == 3) adbSync()
+                  if (tab == 3) {
+                      adbSync()
+                      if (!notifAsked) { notifAsked = true; askNotif() }
+                  }
                   updateBanner()
                   resetBtn.text = "RESET SELECTED DATA (${selected.size})"
                   resetBtn.isEnabled = selected.isNotEmpty()
@@ -1555,7 +1574,7 @@ jobs:
                   val c = Cfg.getInt(this, "$t.count", if (t == "gift") Cfg.GIFT_COUNT else Cfg.DEF_COUNT)
                   val d1 = Cfg.getInt(this, "$t.d1", if (t == "gift") Cfg.GIFT_D1 else Cfg.DEF_D1)
                   val d2 = Cfg.getInt(this, "$t.d2", if (t == "gift") Cfg.GIFT_D2 else Cfg.DEF_D2)
-                  autoSub.text = "$c server · delay ${fmt(d1)}"
+                  autoSub.text = "$c server · R1 ${fmt(d1)} · R2 ${fmt(d2.coerceAtLeast(2))}"
               }
 
               private fun selectAllServers(flag: Boolean) {
@@ -1594,7 +1613,7 @@ jobs:
                       .putStringArrayListExtra(RunService.EXTRA_PKGS, ArrayList(list))
                       .putExtra(RunService.EXTRA_ACT, Cfg.get(this, t, "act"))
                       .putExtra(RunService.EXTRA_D1, Cfg.getInt(this, "$t.d1", Cfg.DEF_D1))
-                      .putExtra(RunService.EXTRA_D2, 0)
+                      .putExtra(RunService.EXTRA_D2, Cfg.getInt(this, "$t.d2", if (t == "gift") Cfg.GIFT_D2 else Cfg.DEF_D2))
                       .putExtra(RunService.EXTRA_CLOSE_END, Cfg.getInt(this, "$t.closeEnd", 0) == 1)
                   startForegroundService(i)
                   toast("OPEN ${list.size} server")
@@ -1707,7 +1726,7 @@ jobs:
                   val t = type()
                   var count = Cfg.getInt(this, "$t.count", if (t == "gift") Cfg.GIFT_COUNT else Cfg.DEF_COUNT).coerceIn(2, 30)
                   var d1 = Cfg.getInt(this, "$t.d1", if (t == "gift") Cfg.GIFT_D1 else Cfg.DEF_D1).coerceIn(2, 120)
-                  var d2 = Cfg.getInt(this, "$t.d2", if (t == "gift") Cfg.GIFT_D2 else Cfg.DEF_D2).coerceIn(0, 120)
+                  var d2 = Cfg.getInt(this, "$t.d2", if (t == "gift") Cfg.GIFT_D2 else Cfg.DEF_D2).coerceIn(2, 120)
                   var closeEnd = Cfg.getInt(this, "$t.closeEnd", 0) == 1
                   var nMode = Cfg.nickMode(this)
                   var nPre = Cfg.nickPre(this)
@@ -1746,8 +1765,7 @@ jobs:
                       orientation = LinearLayout.HORIZONTAL
                       gravity = Gravity.CENTER_VERTICAL
                   }
-                  val topIcon = tv("⇅", 20f, cyan, true).apply {
-                      gravity = Gravity.CENTER
+                  val topIcon = vecIcon(R.drawable.ic_swap, cyan, 11).apply {
                       background = shape(Theme.t(0xFF3B1A66.toInt()), 24, 1, cyan)
                   }
                   top.addView(topIcon, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -1755,7 +1773,8 @@ jobs:
                   topTexts.addView(tv("AUTO TASK", 18f, 0xFFFFFFFF.toInt(), true))
                   topTexts.addView(tv("SEQUENCE CONFIGURATION", 10f, muted))
                   top.addView(topTexts, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
-                  val defBtn = tv("↺ DEFAULT", 11f, white, true).apply {
+                  val defBtn = tv("DEFAULT", 11f, white, true).apply {
+                      text = Icons.label(this@MainActivity, R.drawable.ic_reset, "DEFAULT", white, 12)
                       gravity = Gravity.CENTER
                       setPadding(dp(12), dp(10), dp(12), dp(10))
                       background = shape(cardDark, 12, 1, line)
@@ -1844,12 +1863,16 @@ jobs:
 
                   box.addView(label("2. STAGE DELAY TIMINGS:"))
                   box.addView(
-                      delayBlock("DELAY TIAP SERVER:", listOf(3, 5, 10, 15, 30, 60), 2, { d1 }, { d1 = it }),
+                      delayBlock("RUN 1 - DELAY TIAP SERVER:", listOf(3, 5, 10, 15, 30, 60), 2, { d1 }, { d1 = it }),
                       LinearLayout.LayoutParams(-1, -2)
+                  )
+                  box.addView(
+                      delayBlock("RUN 2 - DELAY TIAP SERVER:", listOf(3, 5, 10, 15, 30, 60), 2, { d2 }, { d2 = it }),
+                      LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) }
                   )
 
                   // 2B. nickname otomatis (RUN 2)
-                  box.addView(label("2B. NICKNAME OTOMATIS:"))
+                  box.addView(label("2B. NICKNAME OTOMATIS (SETELAH RUN 2 SELESAI):"))
                   val nickBox = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       background = shape(cardDark, 16, 1, Theme.t(0xFF24173D.toInt()))
@@ -1925,9 +1948,9 @@ jobs:
                       reqBox.visibility = if (nMode == 2) View.VISIBLE else View.GONE
                       timeBox.visibility = if (nMode == 0) View.GONE else View.VISIBLE
                       nickHint.text = when {
-                          nMode == 0 -> "Mati. Server hanya dibuka satu per satu."
-                          nMode == 1 -> "Setelah semua apk terbuka: balik ke tiap apk lalu ketuk-ketuk sesuai alur RANDOM. Hanya 1 putaran."
-                          else -> "Setelah semua apk terbuka: balik ke tiap apk, nick disalin ke clipboard, lalu alur REQUEST (pilih kolom, paste, OK, skip), lanjut apk berikutnya. Hanya 1 putaran."
+                          nMode == 0 -> "Mati. Server hanya dibuka: RUN 1 lalu RUN 2."
+                          nMode == 1 -> "RUN 1 buka semua apk, RUN 2 buka semua sekali lagi sampai kelar. Baru setelah itu nick jalan: di tiap apk ketuk-ketuk sesuai alur RANDOM."
+                          else -> "RUN 1 buka semua apk, RUN 2 buka semua sekali lagi sampai kelar. Baru setelah itu nick jalan: di tiap apk nick disalin ke clipboard lalu alur REQUEST (pilih kolom, paste, OK, skip)."
                       }
                   }
 
@@ -1936,7 +1959,7 @@ jobs:
                       setOnClickListener { closeEnd = !closeEnd; renderAll() }
                   }
                   box.addView(closeTv)
-                  renders.add { closeTv.text = (if (closeEnd) "☑ " else "☐ ") + "Tutup semua server di akhir urutan" }
+                  renders.add { closeTv.text = Icons.label(this, if (closeEnd) R.drawable.ic_check_on else R.drawable.ic_check_off, "Tutup semua server di akhir urutan", if (closeEnd) green else muted, 18) }
 
                   // 3. izin
                   box.addView(label("3. SYSTEM PERMISSIONS STATUS:"))
@@ -1948,14 +1971,14 @@ jobs:
                           setPadding(dp(8), dp(12), dp(8), dp(12))
                           setOnClickListener { onClick() }
                       }
-                      val icon = tv("", 20f, green, true).apply { gravity = Gravity.CENTER }
+                      val icon = vecIcon(R.drawable.ic_check, green)
                       val nm = tv(name, 11f, white, true).apply { gravity = Gravity.CENTER }
-                      c.addView(icon)
+                      c.addView(icon, LinearLayout.LayoutParams(dp(24), dp(24)))
                       c.addView(nm)
                       renders.add {
                           val good = ok()
-                          icon.text = if (good) "✓" else "✕"
-                          icon.setTextColor(if (good) green else red)
+                          icon.setImageResource(if (good) R.drawable.ic_check else R.drawable.ic_close)
+                          icon.setColorFilter(if (good) green else red)
                           c.background = shape(if (good) Theme.t(0xFF2A1650.toInt()) else 0xFF2A1418.toInt(), 14, 1, if (good) btnLine else 0xFF7F1D1D.toInt())
                       }
                       return c
@@ -1983,7 +2006,8 @@ jobs:
                       background = shape(cardDark, 16, 1, Theme.t(0xFF24173D.toInt()))
                       setOnClickListener { save(); dlg?.dismiss() }
                   }
-                  val startBtn = tv("▶ START", 14f, Theme.t(0xFF1E0B3A.toInt()), true).apply {
+                  val startBtn = tv("START", 14f, Theme.t(0xFF1E0B3A.toInt()), true).apply {
+                      text = Icons.label(this@MainActivity, R.drawable.ic_play, "START", Theme.t(0xFF1E0B3A.toInt()), 16)
                       gravity = Gravity.CENTER
                       background = shape(cyan, 16)
                       setOnClickListener { save(); dlg?.dismiss(); startRun() }
@@ -2058,103 +2082,37 @@ jobs:
                   val rg = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
                   rootGroup = rg
                   fun rwide(v: View, top: Int = 8) = rg.addView(v, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) })
-                  rwide(tv("Mode ROOT: untuk HP yang sudah root (Magisk / KernelSU / APatch), tanpa ADB dan tanpa PC. " +
-                      "Ketuk CEK AKSES ROOT lalu izinkan permintaan root. Setelah itu tab DATA bisa menghapus data aplikasi " +
-                      "langsung lewat root, tidak perlu Device Owner.", 11f, muted), 12)
-                  rwide(colorBtn("CEK AKSES ROOT", Theme.t(0xFF7C3AED.toInt())) {
-                      adbAsync("CEK ROOT") {
-                          if (!RootHelper.check()) {
-                              throw IllegalStateException("Akses root ditolak / tidak ada. Izinkan Rizzxy Store di Magisk/KernelSU lalu ulangi")
-                          }
-                          AdbHelper.log("Root OK (uid=0)")
-                      }
-                  }, 14)
-                  rwide(colorBtn("AKTIFKAN AKSESIBILITAS (AUTO)", Theme.t(0xFF7C3AED.toInt())) { enableAccAuto(true) })
-                  rwide(colorBtn("SET DEVICE OWNER (ROOT) — opsional", Theme.t(0xFF6D28D9.toInt())) {
-                      adbAsync("SET DEVICE OWNER (ROOT)") {
-                          val out = RootHelper.setDeviceOwner(packageName)
-                          AdbHelper.log(out)
-                          if (out.contains("already some accounts", true)) {
-                              throw IllegalStateException("Hapus semua akun (Google dll.) di perangkat dulu, lalu ulangi")
-                          }
-                          if (out.contains("Exception", true) || out.contains("Error", true)) {
-                              throw IllegalStateException(out.lines().firstOrNull().orEmpty().take(120))
-                          }
-                      }
-                  })
+                  rwide(tv("Mode ROOT: ketuk CONNECT lalu izinkan permintaan root.", 11f, muted), 12)
+                  rwide(colorBtn("CONNECT", Theme.t(0xFF7C3AED.toInt())) { rootConnect() }, 14)
                   outer.addView(rg, LinearLayout.LayoutParams(-1, -2))
 
                   if (Build.VERSION.SDK_INT < 30) {
                       wide(tv("ADB nirkabel butuh Android 11 atau lebih baru.", 12f, red))
                   }
 
-                  wide(tv("Aktifkan Opsi Pengembang → Debugging nirkabel (harus tersambung Wi-Fi), lalu isi data di bawah. " +
-                      "Port bisa dideteksi otomatis.", 11f, muted))
-                  wide(softBtn("BUKA OPSI PENGEMBANG") {
-                      try { startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
-                      catch (e: Exception) { toast("Tidak bisa membuka Opsi Pengembang") }
-                  })
-
-                  box.addView(lbl("IP PERANGKAT"))
+                  // IP dan kode pairing diurus otomatis (kode diketik di notifikasi)
                   adbIp = field("192.168.x.x", false)
                   adbIp.setText(AdbHelper.localIp())
-                  box.addView(adbIp)
-
-                  box.addView(lbl("PORT PAIRING          KODE PAIRING (6 DIGIT)"))
-                  adbPairPort = field("port", true)
                   adbCode = field("000000", true)
-                  val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                  row1.addView(adbPairPort, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(4) })
-                  row1.addView(adbCode, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4) })
-                  box.addView(row1)
 
-                  box.addView(lbl("PORT CONNECT"))
-                  adbConnPort = field("port", true)
-                  box.addView(adbConnPort)
+                  fun portCol(title: String, f: EditText): View {
+                      val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                      col.addView(tv(title, 10f, muted, true).apply { setPadding(dp(2), 0, 0, dp(4)) })
+                      col.addView(f)
+                      return col
+                  }
+                  adbPairPort = field("otomatis", true)
+                  adbConnPort = field("otomatis", true)
+                  val portRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                  portRow.addView(portCol("PORT PAIRING", adbPairPort), LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(4) })
+                  portRow.addView(portCol("PORT CONNECT", adbConnPort), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4) })
+                  wide(portRow, 12)
 
-                  fun ip() = adbIp.text.toString().trim()
-                  fun num(e: EditText) = e.text.toString().trim().toIntOrNull() ?: 0
+                  wide(tv("Aktifkan Debugging nirkabel, buka 'Pair device with pairing code', lalu ketuk CONNECT. " +
+                      "Kalau belum pairing, ketik kode 6 digit di notifikasi.", 11f, muted), 10)
 
-                  wide(softBtn("↻ DETEKSI PORT OTOMATIS") {
-                      AdbHelper.startDiscovery(this)
-                      toast("Mendeteksi… buka dialog pairing / aktifkan Debugging nirkabel")
-                  }, 14)
-                  wide(colorBtn("PAIR + CONNECT", Theme.t(0xFF7C3AED.toInt())) {
-                      val code = adbCode.text.toString().trim()
-                      if (code.length != 6) { toast("Kode pairing harus 6 digit"); return@colorBtn }
-                      val h = ip(); val pp = num(adbPairPort); val cp = num(adbConnPort)
-                      AdbHelper.startDiscovery(this)
-                      adbAsync("PAIR + CONNECT") { AdbHelper.pairAndConnect(this, code, h, pp, cp) }
-                  })
-                  wide(softBtn("PAIR VIA NOTIFIKASI (dialog tetap terbuka)") {
-                      AdbHelper.startDiscovery(this)
-                      AdbHelper.postPairNotification(this)
-                      toast("Buka dialog 'Pair device with pairing code', tarik notifikasi, ketik kodenya")
-                  })
-                  wide(softBtn("CONNECT SAJA (sudah pernah pairing)") {
-                      val h = ip(); val cp = num(adbConnPort)
-                      AdbHelper.startDiscovery(this)
-                      adbAsync("CONNECT") { AdbHelper.connectAuto(this, h, cp) }
-                  })
-                  wide(colorBtn("AKTIFKAN AKSESIBILITAS (AUTO)", Theme.t(0xFF7C3AED.toInt())) { enableAccAuto(false) }, 14)
-                  wide(colorBtn("SET DEVICE OWNER", Theme.t(0xFF6D28D9.toInt())) {
-                      adbAsync("SET DEVICE OWNER") {
-                          if (!AdbHelper.connected) throw IllegalStateException("Belum terhubung ke ADB")
-                          val out = AdbHelper.run(this, "dpm set-device-owner $packageName/.AdminReceiver").trim()
-                          AdbHelper.log(out)
-                          if (out.contains("already some accounts", true)) {
-                              throw IllegalStateException("Hapus semua akun (Google dll.) di perangkat dulu, lalu ulangi")
-                          }
-                          if (out.contains("Exception", true) || out.contains("Error", true)) {
-                              throw IllegalStateException(out.lines().firstOrNull().orEmpty().take(120))
-                          }
-                      }
-                  }, 14)
-                  wide(softBtn("PUTUSKAN ADB") {
-                      AdbHelper.disconnect()
-                      AdbHelper.stopDiscovery()
-                      adbSync()
-                  })
+                  adbMainBtn = colorBtn("CONNECT", Theme.t(0xFF7C3AED.toInt())) { adbConnectFlow() }
+                  wide(adbMainBtn, 14)
 
                   outer.addView(lbl("LOG"))
                   adbLog = tv("", 10f, cyan).apply {
@@ -2173,7 +2131,11 @@ jobs:
                * beri WRITE_SECURE_SETTINGS lewat ROOT / ADB, lalu tulis daftar layanan aktif.
                */
               private fun enableAccAuto(viaRoot: Boolean) {
-                  adbAsync("AKTIFKAN AKSESIBILITAS") {
+                  adbAsync("AKTIFKAN AKSESIBILITAS") { grantAcc(viaRoot) }
+              }
+
+              private fun grantAcc(viaRoot: Boolean) {
+                  run {
                       val grant = "pm grant $packageName android.permission.WRITE_SECURE_SETTINGS"
                       val raw: String
                       if (viaRoot) {
@@ -2200,14 +2162,98 @@ jobs:
                   }
               }
 
+              private fun askNotif(): Boolean {
+                  if (Build.VERSION.SDK_INT >= 33 &&
+                      checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                  ) {
+                      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+                      return false
+                  }
+                  return true
+              }
+
+              private fun setOwner(viaRoot: Boolean) {
+                  val out: String
+                  if (viaRoot) {
+                      out = RootHelper.setDeviceOwner(packageName).trim()
+                  } else {
+                      if (!AdbHelper.connected) throw IllegalStateException("Belum terhubung ke ADB")
+                      out = AdbHelper.run(this, "dpm set-device-owner $packageName/.AdminReceiver").trim()
+                  }
+                  AdbHelper.log(out)
+                  if (out.contains("already some accounts", true)) {
+                      throw IllegalStateException("Hapus semua akun (Google dll.) di perangkat dulu, lalu ulangi")
+                  }
+                  if (out.contains("Exception", true) || out.contains("Error", true)) {
+                      throw IllegalStateException(out.lines().firstOrNull().orEmpty().take(120))
+                  }
+              }
+
+              /** Setelah terhubung: aktifkan Aksesibilitas dan Device Owner otomatis (yang gagal cukup dicatat di log). */
+              private fun autoSetup(viaRoot: Boolean) {
+                  try {
+                      if (!accEnabled()) grantAcc(viaRoot)
+                  } catch (e: Throwable) {
+                      AdbHelper.log("GAGAL aksesibilitas: " + (e.message ?: e.javaClass.simpleName))
+                  }
+                  try {
+                      if (!dpm.isDeviceOwnerApp(packageName)) setOwner(viaRoot)
+                  } catch (e: Throwable) {
+                      AdbHelper.log("GAGAL device owner: " + (e.message ?: e.javaClass.simpleName))
+                  }
+              }
+
+              private fun rootConnect() {
+                  adbAsync("CONNECT ROOT") {
+                      if (!RootHelper.check()) {
+                          throw IllegalStateException("Akses root ditolak / tidak ada. Izinkan Rizzxy Store di Magisk/KernelSU lalu ulangi")
+                      }
+                      AdbHelper.log("Root OK (uid=0)")
+                      autoSetup(true)
+                  }
+              }
+
+              /** Satu tombol: connect; kalau belum pairing, kirim notifikasi untuk mengetik kode. Ketuk lagi saat terhubung = putuskan. */
+              private fun adbConnectFlow() {
+                  if (AdbHelper.connected) {
+                      AdbHelper.disconnect()
+                      AdbHelper.stopDiscovery()
+                      autoDone = false
+                      adbSync()
+                      return
+                  }
+                  if (!askNotif()) {
+                      toast("Izinkan notifikasi dulu, lalu ketuk CONNECT lagi")
+                      return
+                  }
+                  adbIp.setText(AdbHelper.localIp())
+                  val h = adbIp.text.toString().trim()
+                  val pp = adbPairPort.text.toString().trim().toIntOrNull() ?: 0
+                  val cp = adbConnPort.text.toString().trim().toIntOrNull() ?: 0
+                  if (pp > 0) AdbHelper.pairPort = pp
+                  AdbHelper.startDiscovery(this)
+                  AdbHelper.log("> CONNECT")
+                  Thread {
+                      try {
+                          AdbHelper.connectAuto(this, h, cp)
+                          AdbHelper.log("OK CONNECT")
+                      } catch (e: Throwable) {
+                          AdbHelper.log("Belum terhubung: " + (e.message ?: e.javaClass.simpleName))
+                          AdbHelper.log("Buka 'Pair device with pairing code', lalu ketik kode di notifikasi")
+                          AdbHelper.postPairNotification(this)
+                      }
+                      runOnUiThread { updateBanner(); adbSync() }
+                  }.start()
+              }
+
               private fun adbAsync(label: String, work: () -> Unit) {
-                  AdbHelper.log("▶ $label")
+                  AdbHelper.log("> $label")
                   Thread {
                       try {
                           work()
-                          AdbHelper.log("✓ $label")
+                          AdbHelper.log("OK $label")
                       } catch (e: Throwable) {
-                          AdbHelper.log("✕ $label: " + (e.message ?: e.javaClass.simpleName))
+                          AdbHelper.log("GAGAL $label: " + (e.message ?: e.javaClass.simpleName))
                       }
                       runOnUiThread { updateBanner(); adbSync() }
                   }.start()
@@ -2222,13 +2268,24 @@ jobs:
                   if (rootMode()) {
                       val r = RootHelper.rooted
                       good = r == true
-                      head = "ROOT: " + when (r) { true -> "TERSEDIA ✓"; false -> "TIDAK ADA"; null -> "BELUM DICEK" }
+                      head = "ROOT: " + when (r) { true -> "TERSEDIA"; false -> "TIDAK ADA"; null -> "BELUM DICEK" }
                   } else {
                       good = AdbHelper.connected
-                      head = if (AdbHelper.connected) "ADB: TERHUBUNG ✓" else "ADB: BELUM TERHUBUNG"
+                      head = if (AdbHelper.connected) "ADB: TERHUBUNG" else "ADB: BELUM TERHUBUNG"
                   }
-                  adbStatus.text = head + "   ·   Device Owner: " + (if (owner) "YA ✓" else "TIDAK")
+                  adbMainBtn.text = if (AdbHelper.connected) "PUTUSKAN ADB" else "CONNECT"
+                  if (!rootMode()) {
+                      if (AdbHelper.connected && !autoDone) {
+                          autoDone = true
+                          adbAsync("SETUP OTOMATIS") { autoSetup(false) }
+                      }
+                      if (!AdbHelper.connected) autoDone = false
+                  }
+                  adbStatus.text = head + "   ·   Device Owner: " + (if (owner) "YA" else "TIDAK")
                   adbStatus.setTextColor(if (good) green else white)
+                  settingsStatus?.text = adbStatus.text
+                  settingsStatus?.setTextColor(if (good) green else white)
+                  settingsBtn?.text = if (rootMode()) "CONNECT ROOT" else if (AdbHelper.connected) "PUTUSKAN ADB" else "CONNECT"
                   val pp = AdbHelper.pairPort
                   if (pp > 0 && adbPairPort.text.toString() != pp.toString()) adbPairPort.setText(pp.toString())
                   val cp = AdbHelper.connPort
@@ -2239,45 +2296,190 @@ jobs:
               // ===== pengaturan paket =====
 
               private fun openSettings() {
+                  var dlg: AlertDialog? = null
+                  val fields = mutableListOf<Triple<String, String, EditText>>()
+                  val sufSel = HashMap<String, LinkedHashSet<String>>()
+                  val sufExtra = HashMap<String, List<String>>()
+                  val line2 = Theme.t(0xFF24173D.toInt())
+                  val chipOff = Theme.t(0xFF24173D.toInt())
+                  val darkTxt = Theme.t(0xFF1E0B3A.toInt())
+
                   val box = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
-                      setPadding(dp(16), dp(8), dp(16), dp(8))
+                      setPadding(dp(18), dp(18), dp(18), dp(14))
+                      background = shape(Theme.s(0xFF120A21.toInt()), 24, 1, line)
                   }
-                  val fields = mutableListOf<Triple<String, String, EditText>>()
-                  fun section(t: String, title: String) {
-                      box.addView(TextView(this).apply {
-                          text = title; setTextColor(cyan); typeface = Typeface.DEFAULT_BOLD
-                          setPadding(0, dp(14), 0, dp(4))
-                      })
-                      val labels = listOf(
-                          "prefix" to "Awalan paket",
-                          "suffix" to "Akhiran (pisah koma). Kosong = semua paket terpasang yang berawalan itu",
-                          "extras" to "Paket tambahan (pisah koma)",
-                          "act" to "Nama activity pembuka"
-                      )
-                      labels.forEach { (f, label) ->
-                          box.addView(TextView(this).apply { text = label; textSize = 11f; setTextColor(muted) })
-                          val e = EditText(this)
-                          e.setText(Cfg.get(this, t, f))
-                          e.textSize = 12f
-                          e.setSingleLine()
-                          box.addView(e)
-                          fields.add(Triple(t, f, e))
+
+                  // judul
+                  val top = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      gravity = Gravity.CENTER_VERTICAL
+                  }
+                  val topIcon = vecIcon(R.drawable.ic_settings, cyan, 11).apply {
+                      background = shape(Theme.t(0xFF3B1A66.toInt()), 24, 1, cyan)
+                  }
+                  top.addView(topIcon, LinearLayout.LayoutParams(dp(48), dp(48)))
+                  val topTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                  topTexts.addView(tv("PENGATURAN", 18f, 0xFFFFFFFF.toInt(), true))
+                  topTexts.addView(tv("PAKET SERVER & ADB", 10f, muted))
+                  top.addView(topTexts, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
+                  box.addView(top)
+
+                  fun label(s: String) = tv(s, 12f, cyan, true).apply { setPadding(dp(2), dp(16), 0, dp(8)) }
+                  fun cardBox() = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      background = shape(cardDark, 16, 1, line2)
+                      setPadding(dp(12), dp(10), dp(12), dp(12))
+                  }
+                  fun small(s: String) = tv(s, 10f, muted, true).apply { setPadding(dp(2), dp(10), 0, dp(4)) }
+                  fun styleSuf(v: TextView, on: Boolean) {
+                      v.background = shape(if (on) cyan else chipOff, 8)
+                      v.setTextColor(if (on) darkTxt else white)
+                  }
+
+                  // ===== ADB =====
+                  box.addView(label("ADB"))
+                  val adbCard = cardBox()
+                  val modeChips = ArrayList<TextView>()
+                  fun renderMode() { modeChips.forEachIndexed { i, c -> styleSuf(c, (i == 1) == rootMode()) } }
+                  val modeRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                  listOf("ADB", "ROOT").forEachIndexed { i, nm ->
+                      val c = chip(nm) {
+                          Cfg.setInt(this, "accessMode", i)
+                          applyMode(); updateBanner(); renderMode(); adbSync()
                       }
+                      modeChips.add(c)
+                      modeRow2.addView(c, LinearLayout.LayoutParams(0, dp(40), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+                  }
+                  adbCard.addView(modeRow2)
+                  val st = tv("", 11f, white, true).apply { setPadding(dp(2), dp(10), dp(2), dp(4)) }
+                  settingsStatus = st
+                  adbCard.addView(st)
+                  val cb = colorBtn("CONNECT", Theme.t(0xFF7C3AED.toInt())) {
+                      if (rootMode()) rootConnect() else adbConnectFlow()
+                  }
+                  settingsBtn = cb
+                  adbCard.addView(cb, LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(6) })
+                  box.addView(adbCard)
+
+                  // ===== pilih akhiran: huruf + angka, tinggal ketuk =====
+                  fun suffixPicker(t: String): View {
+                      val all = "0123456789abcdefghijklmnopqrstuvwxyz".map { it.toString() }
+                      val sel = LinkedHashSet<String>()
+                      val extra = ArrayList<String>()
+                      Cfg.get(this, t, "suffix").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                          .forEach { if (it in all) sel.add(it) else extra.add(it) }
+                      sufSel[t] = sel
+                      sufExtra[t] = extra
+                      val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                      val chips = ArrayList<TextView>()
+                      val info = tv("", 10f, muted).apply { setPadding(dp(2), dp(8), dp(2), 0) }
+                      fun render() {
+                          chips.forEachIndexed { i, c -> styleSuf(c, all[i] in sel) }
+                          info.text = if (sel.isEmpty() && extra.isEmpty()) {
+                              "Kosong = semua paket terpasang yang berawalan itu"
+                          } else {
+                              "Dipilih ${sel.size}: " + sel.joinToString(" ")
+                          }
+                      }
+                      val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                      fun q(lb: String, act: () -> Unit) {
+                          val bt = tv(lb, 11f, cyan, true).apply {
+                              gravity = Gravity.CENTER
+                              background = shape(Theme.t(0xFF3B1A66.toInt()), 8, 1, cyan)
+                              setOnClickListener { extra.clear(); act(); render() }
+                          }
+                          quick.addView(bt, LinearLayout.LayoutParams(0, dp(36), 1f).apply { setMargins(dp(2), 0, dp(2), dp(4)) })
+                      }
+                      q("0-9") { sel.clear(); sel.addAll(all.subList(0, 10)) }
+                      q("a-z") { sel.clear(); sel.addAll(all.subList(10, 36)) }
+                      q("SEMUA") { sel.clear(); sel.addAll(all) }
+                      q("KOSONG") { sel.clear() }
+                      wrap.addView(quick)
+                      for (r in 0 until 4) {
+                          val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                          for (k in 0 until 9) {
+                              val ch = all[r * 9 + k]
+                              val c = TextView(this).apply {
+                                  text = ch
+                                  gravity = Gravity.CENTER
+                                  textSize = 13f
+                                  typeface = Typeface.DEFAULT_BOLD
+                                  setOnClickListener { if (!sel.add(ch)) sel.remove(ch); render() }
+                              }
+                              chips.add(c)
+                              row.addView(c, LinearLayout.LayoutParams(0, dp(38), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) })
+                          }
+                          wrap.addView(row)
+                      }
+                      wrap.addView(info)
+                      render()
+                      return wrap
+                  }
+
+                  fun section(t: String, title: String) {
+                      box.addView(label(title))
+                      val c = cardBox()
+                      fun addField(f: String, lb: String) {
+                          c.addView(small(lb))
+                          val e = field("", false)
+                          e.setText(Cfg.get(this, t, f))
+                          fields.add(Triple(t, f, e))
+                          c.addView(e)
+                      }
+                      addField("prefix", "AWALAN PAKET")
+                      c.addView(small("AKHIRAN (KETUK UNTUK PILIH)"))
+                      c.addView(suffixPicker(t))
+                      addField("extras", "PAKET TAMBAHAN (PISAH KOMA)")
+                      addField("act", "NAMA ACTIVITY PEMBUKA")
+                      box.addView(c)
                   }
                   section("normal", "SERVER NORMAL")
                   section("advance", "SERVER ADVANCE")
-                  AlertDialog.Builder(this)
-                      .setTitle("PENGATURAN PAKET")
-                      .setView(ScrollView(this).apply { addView(box) })
-                      .setNegativeButton("BATAL", null)
-                      .setNeutralButton("DEFAULT") { _, _ -> Cfg.reset(this); refresh() }
-                      .setPositiveButton("SIMPAN") { _, _ ->
-                          fields.forEach { (t, f, e) -> Cfg.set(this, t, f, e.text.toString()) }
+
+                  // tombol bawah
+                  val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                  val defBtn = tv("DEFAULT", 12f, white, true).apply {
+                      gravity = Gravity.CENTER
+                      background = shape(cardDark, 16, 1, line2)
+                      setOnClickListener {
+                          Cfg.resetPackages(this@MainActivity)
+                          refresh()
+                          dlg?.dismiss()
+                          toast("Paket kembali ke bawaan")
+                      }
+                  }
+                  val cancelBtn = tv("BATAL", 13f, Theme.t(0xFFDDD6FE.toInt()), true).apply {
+                      gravity = Gravity.CENTER
+                      background = shape(cardDark, 16, 1, line2)
+                      setOnClickListener { dlg?.dismiss() }
+                  }
+                  val saveBtn = tv("SIMPAN", 14f, darkTxt, true).apply {
+                      gravity = Gravity.CENTER
+                      background = shape(cyan, 16)
+                      setOnClickListener {
+                          fields.forEach { (t, f, e) -> Cfg.set(this@MainActivity, t, f, e.text.toString()) }
+                          sufSel.forEach { (t, s) ->
+                              Cfg.set(this@MainActivity, t, "suffix", (s + (sufExtra[t] ?: emptyList<String>())).joinToString(","))
+                          }
                           refresh()
                           toast("Tersimpan")
+                          dlg?.dismiss()
                       }
-                      .show()
+                  }
+                  actions.addView(defBtn, LinearLayout.LayoutParams(0, dp(52), 1f).apply { rightMargin = dp(4) })
+                  actions.addView(cancelBtn, LinearLayout.LayoutParams(0, dp(52), 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
+                  actions.addView(saveBtn, LinearLayout.LayoutParams(0, dp(52), 1.3f).apply { leftMargin = dp(4) })
+                  box.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(18) })
+
+                  val d = AlertDialog.Builder(this).setView(ScrollView(this).apply { addView(box) }).create()
+                  dlg = d
+                  d.setOnDismissListener { settingsStatus = null; settingsBtn = null }
+                  d.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                  renderMode()
+                  d.show()
+                  d.window?.setLayout((resources.displayMetrics.widthPixels * 0.94).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
+                  adbSync()
               }
 
               // ===== DATA: hapus data =====
@@ -2331,7 +2533,7 @@ jobs:
                       var ok = 0
                       for (p in targets) {
                           try { if (RootHelper.clearData(p)) ok++ } catch (e: Exception) {
-                              AdbHelper.log("✕ clear $p: " + (e.message ?: e.javaClass.simpleName))
+                              AdbHelper.log("GAGAL clear $p: " + (e.message ?: e.javaClass.simpleName))
                           }
                       }
                       runOnUiThread {
@@ -2372,8 +2574,7 @@ jobs:
                           notifyDataSetChanged()
                       }
 
-                      val check = tv("✓", 20f, if (on) green else 0xFF334155.toInt(), true).apply {
-                          gravity = Gravity.CENTER
+                      val check = vecIcon(R.drawable.ic_check, if (on) green else 0xFF334155.toInt(), 11).apply {
                           background = shape(if (on) Theme.t(0xFF2A1650.toInt()) else cardDark, 12, 1, if (on) btnLine else Theme.t(0xFF24173D.toInt()))
                           setOnClickListener { toggle() }
                       }
@@ -2392,7 +2593,7 @@ jobs:
                       inner.addView(names, LinearLayout.LayoutParams(0, -2, 1f).apply {
                           leftMargin = dp(14); rightMargin = dp(8)
                       })
-                      inner.addView(softBtn("▶ OPEN") { openOne(row.pkg) })
+                      inner.addView(softBtn("OPEN", R.drawable.ic_play) { openOne(row.pkg) })
 
                       return LinearLayout(this@MainActivity).apply {
                           setPadding(0, dp(4), 0, dp(4))
@@ -2565,7 +2766,7 @@ jobs:
                           AdbHelper.postStatus(app, "Pairing dan connect berhasil")
                           AdbHelper.stopDiscovery()
                       } catch (e: Throwable) {
-                          AdbHelper.log("✕ " + (e.message ?: e.javaClass.simpleName))
+                          AdbHelper.log("GAGAL " + (e.message ?: e.javaClass.simpleName))
                           AdbHelper.postStatus(app, "Gagal: " + (e.message ?: "lihat tab ADB"))
                       } finally {
                           pending.finish()
@@ -2875,7 +3076,7 @@ jobs:
           import android.widget.ProgressBar
           import android.widget.TextView
 
-          /** Buka semua server satu per satu, lalu (kalau nick aktif) balik ke tiap server untuk isi nick. Ada PAUSE/PLAY dan STOP. */
+          /** RUN 1: buka semua server satu per satu. RUN 2: buka semua sekali lagi sampai kelar. Nick (kalau aktif) baru jalan SETELAH RUN 2 selesai. Ada PAUSE/PLAY dan STOP. */
           class RunService : Service() {
 
               companion object {
@@ -2942,24 +3143,41 @@ jobs:
               }
 
               private fun runAll(pkgs: List<String>, act: String, d1: Int, d2: Int, closeEnd: Boolean) {
-                  // Tahap 1: buka semua server satu per satu.
-                  // Tahap 2 (kalau nick aktif): setelah SEMUA terbuka, balik ke tiap server lalu isi nick.
+                  // RUN 1: buka semua server satu per satu (jeda d1).
+                  // RUN 2: buka semua server sekali lagi sampai kelar (jeda d2). Tanpa nick di sini.
+                  // NICK (kalau aktif): baru jalan setelah RUN 2 selesai, lalu per server isi nick.
                   val total = pkgs.size
                   val nickMode = Cfg.nickMode(this)
                   val opened = ArrayList<String>()
                   var step = 0
-                  loop@ for (p in pkgs) {
-                      if (!waitIfPaused()) break@loop
+                  loop1@ for (p in pkgs) {
+                      if (!waitIfPaused()) break@loop1
                       step++
-                      setTitle("[RUN] ${step}/${total}", step * 100 / total)
-                      log("OPEN $p (${d1}s)")
+                      setTitle("[RUN 1] ${step}/${total}", step * 100 / total)
+                      log("RUN 1 OPEN $p (${d1}s)")
                       if (!open(p, act)) {
                           log("SKIP $p (tidak ada activity)")
                           continue
                       }
                       opened.add(p)
-                      if (!sleepMs(d1 * 1000L)) break@loop
+                      if (!sleepMs(d1 * 1000L)) break@loop1
                   }
+                  val delay2 = d2.coerceAtLeast(2)
+                  if (!stopFlag && opened.isNotEmpty()) {
+                      var s2 = 0
+                      loop2@ for (p in opened) {
+                          if (!waitIfPaused()) break@loop2
+                          s2++
+                          setTitle("[RUN 2] ${s2}/${opened.size}", s2 * 100 / opened.size)
+                          log("RUN 2 OPEN $p (${delay2}s)")
+                          if (!open(p, act)) {
+                              log("SKIP $p")
+                              continue
+                          }
+                          if (!sleepMs(delay2 * 1000L)) break@loop2
+                      }
+                  }
+                  // stopFlag hanya false di sini kalau RUN 2 benar-benar sampai kelar
                   if (!stopFlag && nickMode != NickAuto.MODE_OFF && opened.isNotEmpty()) {
                       var nickNo = Cfg.nickStart(this)
                       var n = 0
@@ -3077,7 +3295,7 @@ jobs:
                   box.background = bgDraw
 
                   val t = TextView(this)
-                  t.text = "[RUN] SIAP"
+                  t.text = "[RUN 1] SIAP"
                   t.setTextColor(0xFFA855F7.toInt())
                   t.textSize = 11f
                   t.typeface = Typeface.DEFAULT_BOLD
@@ -3091,11 +3309,13 @@ jobs:
                   l.typeface = Typeface.MONOSPACE
 
                   val play = Button(this)
-                  play.text = "⏸ PAUSE"
+                  play.isAllCaps = false
                   play.textSize = 10f
+                  play.text = Icons.label(this, R.drawable.ic_pause, "PAUSE", play.currentTextColor, 12)
                   play.setOnClickListener {
                       paused = !paused
-                      play.text = if (paused) "▶ PLAY" else "⏸ PAUSE"
+                      play.text = if (paused) Icons.label(this, R.drawable.ic_play, "PLAY", play.currentTextColor, 12)
+                      else Icons.label(this, R.drawable.ic_pause, "PAUSE", play.currentTextColor, 12)
                       titleTv?.let { tv ->
                           val base = tv.text.toString().removePrefix("[PAUSE] ")
                           tv.text = if (paused) "[PAUSE] $base" else base
@@ -3103,8 +3323,9 @@ jobs:
                   }
 
                   val stop = Button(this)
-                  stop.text = "■ STOP"
+                  stop.isAllCaps = false
                   stop.textSize = 10f
+                  stop.text = Icons.label(this, R.drawable.ic_stop, "STOP", stop.currentTextColor, 12)
                   stop.setOnClickListener {
                       stopFlag = true
                       paused = false
@@ -3486,6 +3707,184 @@ jobs:
               <path
                   android:fillColor="#FFFFFFFF"
                   android:pathData="M3,9v6h4l5,5V4L7,9H3z M16.5,12c0,-1.77 -1.02,-3.29 -2.5,-4.03v8.05c1.48,-0.73 2.5,-2.25 2.5,-4.02z M14,3.23v2.06c2.89,0.86 5,3.54 5,6.71s-2.11,5.85 -5,6.71v2.06c4.01,-0.91 7,-4.49 7,-8.77s-2.99,-7.86 -7,-8.77z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/Icons.kt')"
+          cat > 'app/src/main/java/com/rizzxy/store/Icons.kt' <<'RZX_EOF'
+          package com.rizzxy.store
+
+          import android.content.Context
+          import android.text.Spannable
+          import android.text.SpannableString
+          import android.text.style.ImageSpan
+
+          /** Teks dengan ikon vector (drawable) di depan, bukan emoji. */
+          object Icons {
+              fun label(c: Context, res: Int, text: String, tint: Int, dpSize: Int = 14): CharSequence {
+                  val px = (dpSize * c.resources.displayMetrics.density).toInt()
+                  val d = c.getDrawable(res)?.mutate() ?: return text
+                  d.setBounds(0, 0, px, px)
+                  d.setTint(tint)
+                  val s = SpannableString("  " + text)
+                  s.setSpan(ImageSpan(d, ImageSpan.ALIGN_BOTTOM), 0, 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                  return s
+              }
+          }
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_play.xml')"
+          cat > 'app/src/main/res/drawable/ic_play.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M8,5v14l11,-7z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_pause.xml')"
+          cat > 'app/src/main/res/drawable/ic_pause.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M6,19h4V5H6v14z M14,5v14h4V5h-4z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_stop.xml')"
+          cat > 'app/src/main/res/drawable/ic_stop.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M6,6h12v12H6z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_refresh.xml')"
+          cat > 'app/src/main/res/drawable/ic_refresh.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M17.65,6.35C16.2,4.9 14.21,4 12,4c-4.42,0 -7.99,3.58 -7.99,8s3.57,8 7.99,8c3.73,0 6.84,-2.55 7.73,-6h-2.08c-0.82,2.33 -3.04,4 -5.65,4 -3.31,0 -6,-2.69 -6,-6s2.69,-6 6,-6c1.66,0 3.14,0.69 4.22,1.78L13,11h7V4l-2.35,2.35z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_theme.xml')"
+          cat > 'app/src/main/res/drawable/ic_theme.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z M12,20V4c4.41,0 8,3.59 8,8s-3.59,8 -8,8z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_settings.xml')"
+          cat > 'app/src/main/res/drawable/ic_settings.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M19.14,12.94c0.04,-0.3 0.06,-0.61 0.06,-0.94c0,-0.32 -0.02,-0.64 -0.07,-0.94l2.03,-1.58c0.18,-0.14 0.23,-0.41 0.12,-0.61l-1.92,-3.32c-0.12,-0.22 -0.37,-0.29 -0.59,-0.22l-2.39,0.96c-0.5,-0.38 -1.03,-0.7 -1.62,-0.94L14.4,2.81c-0.04,-0.24 -0.24,-0.41 -0.48,-0.41h-3.84c-0.24,0 -0.43,0.17 -0.47,0.41L9.25,5.35C8.66,5.59 8.12,5.92 7.63,6.29L5.24,5.33c-0.22,-0.08 -0.47,0 -0.59,0.22L2.74,8.87C2.62,9.08 2.66,9.34 2.86,9.48l2.03,1.58C4.84,11.36 4.8,11.69 4.8,12s0.02,0.64 0.07,0.94l-2.03,1.58c-0.18,0.14 -0.23,0.41 -0.12,0.61l1.92,3.32c0.12,0.22 0.37,0.29 0.59,0.22l2.39,-0.96c0.5,0.38 1.03,0.7 1.62,0.94l0.36,2.54c0.05,0.24 0.24,0.41 0.48,0.41h3.84c0.24,0 0.44,-0.17 0.47,-0.41l0.36,-2.54c0.59,-0.24 1.13,-0.56 1.62,-0.94l2.39,0.96c0.22,0.08 0.47,0 0.59,-0.22l1.92,-3.32c0.12,-0.22 0.07,-0.47 -0.12,-0.61L19.14,12.94z M12,15.6c-1.98,0 -3.6,-1.62 -3.6,-3.6s1.62,-3.6 3.6,-3.6s3.6,1.62 3.6,3.6S13.98,15.6 12,15.6z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_swap.xml')"
+          cat > 'app/src/main/res/drawable/ic_swap.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M16,17.01V10h-2v7.01h-3L15,21l4,-3.99h-3z M9,3L5,6.99h3V14h2V6.99h3L9,3z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_reset.xml')"
+          cat > 'app/src/main/res/drawable/ic_reset.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M12,5V1L7,6l5,5V7c3.31,0 6,2.69 6,6s-2.69,6 -6,6 -6,-2.69 -6,-6H4c0,4.42 3.58,8 8,8s8,-3.58 8,-8 -3.58,-8 -8,-8z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_check.xml')"
+          cat > 'app/src/main/res/drawable/ic_check.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_close.xml')"
+          cat > 'app/src/main/res/drawable/ic_close.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_check_on.xml')"
+          cat > 'app/src/main/res/drawable/ic_check_on.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M19,3H5c-1.11,0 -2,0.9 -2,2v14c0,1.1 0.89,2 2,2h14c1.11,0 2,-0.9 2,-2V5c0,-1.1 -0.89,-2 -2,-2z M10,17l-5,-5 1.41,-1.41L10,14.17l7.59,-7.59L19,8l-9,9z" />
+          </vector>
+          RZX_EOF
+          mkdir -p "$(dirname 'app/src/main/res/drawable/ic_check_off.xml')"
+          cat > 'app/src/main/res/drawable/ic_check_off.xml' <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp"
+              android:height="24dp"
+              android:viewportWidth="24"
+              android:viewportHeight="24">
+              <path
+                  android:fillColor="#FFFFFFFF"
+                  android:pathData="M19,5v14H5V5h14m0,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2V5c0,-1.1 -0.9,-2 -2,-2z" />
           </vector>
           RZX_EOF
           mkdir -p "$(dirname 'app/src/main/res/values/strings.xml')"
