@@ -7,6 +7,7 @@ const sig = (body) => crypto.createHmac('sha256', secret()).update(body).digest(
 const normDev = (d) => String(d || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase().slice(0, 8);
 
 function make({ days, device }) {
+  days = Math.min(Math.max(Number(days) || 0, 0), 3650); // maks 10 tahun
   const expH = days > 0 ? Math.floor((Date.now() + days * 86400000) / 3600000) : 0;
   const e = expH.toString(36).toUpperCase();
   const id = crypto.randomBytes(4).toString('hex').toUpperCase();
@@ -27,7 +28,7 @@ function check(token, device) {
   if (revoked.includes(id)) return { ok: false, reason: 'Token dinonaktifkan' };
   const exp = parseInt(e, 36) * 3600000;
   if (exp > 0 && Date.now() > exp) return { ok: false, reason: 'Token kedaluwarsa' };
-  if (dev !== '0' && dev !== normDev(device)) return { ok: false, reason: 'Token ini untuk perangkat lain' };
+  if (dev !== '0' && dev !== normDev(device)) return { ok: false, reason: `Token untuk perangkat lain (token: ${dev}, HP: ${normDev(device) || 'kosong'})` };
   return { ok: true, id, exp };
 }
 
