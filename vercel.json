@@ -1,0 +1,9 @@
+{
+  "rewrites": [
+    { "source": "/user", "destination": "/api/user" },
+    { "source": "/user/", "destination": "/api/user" },
+    { "source": "/token", "destination": "/api/token" },
+    { "source": "/token/", "destination": "/api/token" },
+    { "source": "/admin", "destination": "/admin.html" }
+  ]
+}
