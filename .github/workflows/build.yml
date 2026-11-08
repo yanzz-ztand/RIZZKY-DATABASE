@@ -64,8 +64,6 @@ jobs:
               implementation("androidx.recyclerview:recyclerview:1.3.2")
               // membuat sertifikat X.509 untuk kunci ADB
               implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
-              // tanda tangan ulang APK clone (v1+v2+v3)
-              implementation("com.android.tools.build:apksig:8.5.2")
           }
 
           // hindari kelas BouncyCastle ganda (keluarga jdk15to18 saja)
@@ -85,8 +83,6 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
               <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
               <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-              <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-              <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -139,10 +135,6 @@ jobs:
 
                   <receiver
                       android:name=".PairReceiver"
-                      android:exported="false" />
-
-                  <receiver
-                      android:name=".CloneReceiver"
                       android:exported="false" />
 
                   <receiver
@@ -545,12 +537,22 @@ jobs:
 
                   /** Tekan tombol Home (system global action). Dipakai fitur HOME ANTAR SERVER: app yang baru dibuka diparkir ke background sebelum app berikutnya dibuka, biar nggak ikut ke-relog. */
                   fun pressHome(): Boolean {
-                      val svc = instance ?: return false
-                      return try {
-                          svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
-                      } catch (e: Exception) {
-                          false
+                      val svc = instance
+                      if (svc != null) {
+                          try {
+                              if (svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)) return true
+                          } catch (e: Exception) {
+                          }
                       }
+                      // cadangan: HP root -> keyevent HOME
+                      if (RootHelper.rooted == true) {
+                          try {
+                              RootHelper.run("input keyevent 3", 15)
+                              return true
+                          } catch (e: Exception) {
+                          }
+                      }
+                      return false
                   }
               }
 
@@ -637,11 +639,11 @@ jobs:
               fun nickRun(c: Context): Int = sp(c).getInt("nick.run", 2).coerceIn(1, 2)
               fun setNickRun(c: Context, v: Int) = sp(c).edit().putInt("nick.run", v.coerceIn(1, 2)).apply()
 
-              // HOME ANTAR SERVER (anti relog): ON/OFF + detik tunggu sebelum pencet Home (1-10s)
+              // HOME ANTAR SERVER: ON/OFF + detik jeda di Home sebelum server berikutnya (1-5s)
               fun homeEnabled(c: Context): Boolean = sp(c).getBoolean("home.enabled", true)
               fun setHomeEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean("home.enabled", v).apply()
-              fun homeDelaySec(c: Context): Int = sp(c).getInt("home.delay", 3).coerceIn(1, 10)
-              fun setHomeDelaySec(c: Context, v: Int) = sp(c).edit().putInt("home.delay", v.coerceIn(1, 10)).apply()
+              fun homeDelaySec(c: Context): Int = sp(c).getInt("home.delay", 3).coerceIn(1, 5)
+              fun setHomeDelaySec(c: Context, v: Int) = sp(c).edit().putInt("home.delay", v.coerceIn(1, 5)).apply()
               fun nickFlow(c: Context): String = sp(c).getString("nick.flow", DEF_NICK_FLOW) ?: DEF_NICK_FLOW
               fun setNickFlow(c: Context, v: String) = sp(c).edit().putString("nick.flow", v.trim()).apply()
               fun nickRFlow(c: Context): String = sp(c).getString("nick.rflow", DEF_NICK_RFLOW) ?: DEF_NICK_RFLOW
@@ -697,605 +699,6 @@ jobs:
                       else -> suffixes.map { prefix + it }
                   }
                   return (base + extras).distinct()
-              }
-          }
-          RZX_EOF
-          mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/Cloner.kt')"
-          cat > 'app/src/main/java/com/rizzxy/store/Cloner.kt' <<'RZX_EOF'
-          package com.rizzxy.store
-
-          import android.content.Context
-          import com.android.apksig.ApkSigner
-          import org.bouncycastle.asn1.x500.X500Name
-          import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
-          import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
-          import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
-          import java.io.BufferedOutputStream
-          import java.io.ByteArrayOutputStream
-          import java.io.File
-          import java.io.FileOutputStream
-          import java.io.RandomAccessFile
-          import java.math.BigInteger
-          import java.nio.ByteBuffer
-          import java.nio.ByteOrder
-          import java.security.KeyFactory
-          import java.security.KeyPairGenerator
-          import java.security.cert.CertificateFactory
-          import java.security.cert.X509Certificate
-          import java.security.spec.PKCS8EncodedKeySpec
-          import java.util.Date
-          import java.util.zip.CRC32
-
-          /**
-           * Membuat salinan (clone) APK dengan nama paket baru: ubah AndroidManifest biner, susun ulang ZIP
-           * (data lain disalin mentah, tanpa kompres ulang), lalu tanda tangan ulang (v1+v2+v3).
-           */
-          object Cloner {
-              private val LE = ByteOrder.LITTLE_ENDIAN
-
-              /** Nama paket clone: prefix + huruf a, b, c ... (huruf yang sama dengan paket sumber dilewati). */
-              fun names(prefix: String, count: Int, src: String): List<String> {
-                  val p = if (prefix.endsWith(".")) prefix else "$prefix."
-                  val out = ArrayList<String>()
-                  var ch = 'a'
-                  while (out.size < count && ch <= 'z') {
-                      val n = p + ch
-                      if (n != src) out.add(n)
-                      ch++
-                  }
-                  return out
-              }
-
-              fun validPrefix(prefix: String): Boolean {
-                  val p = if (prefix.endsWith(".")) prefix.dropLast(1) else prefix
-                  return Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+").matches(p)
-              }
-
-              /** Hasil: daftar file APK (base + split) yang sudah ditandatangani, siap dipasang. */
-              fun build(c: Context, srcPkg: String, newPkg: String, label: String, outDir: File): List<File> {
-                  val pm = c.packageManager
-                  val ai = pm.getApplicationInfo(srcPkg, 0)
-                  val paths = ArrayList<String>()
-                  paths.add(ai.sourceDir)
-                  ai.splitSourceDirs?.let { paths.addAll(it) }
-                  val signer = signerConfig(c)
-                  val res = ArrayList<File>()
-                  paths.forEachIndexed { i, path ->
-                      val tmp = File(outDir, "tmp_$i.apk")
-                      val out = File(outDir, if (i == 0) "base.apk" else "split_$i.apk")
-                      rewriteZip(File(path), tmp) { manifest -> Axml.patch(manifest, srcPkg, newPkg, if (i == 0) label else null) }
-                      ApkSigner.Builder(listOf(signer))
-                          .setInputApk(tmp)
-                          .setOutputApk(out)
-                          .setMinSdkVersion(maxOf(ai.minSdkVersion, 21))
-                          .setV1SigningEnabled(true)
-                          .setV2SigningEnabled(true)
-                          .setV3SigningEnabled(true)
-                          .build()
-                          .sign()
-                      tmp.delete()
-                      res.add(out)
-                  }
-                  return res
-              }
-
-              // ===== kunci tanda tangan (dibuat sekali, dipakai semua clone) =====
-
-              private fun signerConfig(c: Context): ApkSigner.SignerConfig {
-                  val kf = File(c.filesDir, "clone_key.pk8")
-                  val cf = File(c.filesDir, "clone_cert.der")
-                  if (!kf.exists() || !cf.exists()) {
-                      val kpg = KeyPairGenerator.getInstance("RSA")
-                      kpg.initialize(2048)
-                      val kp = kpg.generateKeyPair()
-                      val name = X500Name("CN=Rizzxy Clone")
-                      val now = System.currentTimeMillis()
-                      val b = JcaX509v3CertificateBuilder(
-                          name, BigInteger.valueOf(now), Date(now - 86_400_000L), Date(now + 36_500L * 86_400_000L), name, kp.public
-                      )
-                      val cs = JcaContentSignerBuilder("SHA256withRSA").build(kp.private)
-                      val cert = JcaX509CertificateConverter().getCertificate(b.build(cs))
-                      kf.writeBytes(kp.private.encoded)
-                      cf.writeBytes(cert.encoded)
-                  }
-                  val key = KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(kf.readBytes()))
-                  val cert = cf.inputStream().use { CertificateFactory.getInstance("X.509").generateCertificate(it) } as X509Certificate
-                  return ApkSigner.SignerConfig.Builder("rizzxy", key, listOf(cert)).build()
-              }
-
-              // ===== tulis ulang ZIP: salin data mentah, ganti hanya AndroidManifest.xml =====
-
-              private class Ent(
-                  val name: String, val flags: Int, val method: Int, val time: Int, val date: Int,
-                  val crc: Long, val csize: Long, val size: Long, val lho: Long
-              )
-
-              private fun u16(b: ByteBuffer, p: Int) = b.getShort(p).toInt() and 0xffff
-              private fun u32(b: ByteBuffer, p: Int) = b.getInt(p).toLong() and 0xffffffffL
-
-              private fun readEntries(raf: RandomAccessFile): List<Ent> {
-                  val len = raf.length()
-                  val tail = minOf(len, 65557L).toInt()
-                  val buf = ByteArray(tail)
-                  raf.seek(len - tail)
-                  raf.readFully(buf)
-                  var i = tail - 22
-                  while (i >= 0 && !(buf[i] == 0x50.toByte() && buf[i + 1] == 0x4b.toByte() && buf[i + 2] == 5.toByte() && buf[i + 3] == 6.toByte())) i--
-                  require(i >= 0) { "bukan file ZIP/APK" }
-                  val e = ByteBuffer.wrap(buf).order(LE)
-                  val count = u16(e, i + 10)
-                  val cdSize = u32(e, i + 12)
-                  val cdOff = u32(e, i + 16)
-                  val cd = ByteArray(cdSize.toInt())
-                  raf.seek(cdOff)
-                  raf.readFully(cd)
-                  val cb = ByteBuffer.wrap(cd).order(LE)
-                  val list = ArrayList<Ent>(count)
-                  var p = 0
-                  for (n in 0 until count) {
-                      require(cb.getInt(p) == 0x02014b50) { "central directory rusak" }
-                      val nlen = u16(cb, p + 28)
-                      val elen = u16(cb, p + 30)
-                      val clen = u16(cb, p + 32)
-                      list.add(
-                          Ent(
-                              String(cd, p + 46, nlen, Charsets.UTF_8), u16(cb, p + 8), u16(cb, p + 10), u16(cb, p + 12), u16(cb, p + 14),
-                              u32(cb, p + 16), u32(cb, p + 20), u32(cb, p + 24), u32(cb, p + 42)
-                          )
-                      )
-                      p += 46 + nlen + elen + clen
-                  }
-                  return list
-              }
-
-              private fun isSigFile(n: String): Boolean {
-                  if (!n.startsWith("META-INF/")) return false
-                  val rest = n.substring(9)
-                  if (rest.contains('/')) return false
-                  val u = rest.uppercase()
-                  return u == "MANIFEST.MF" || u.endsWith(".SF") || u.endsWith(".RSA") || u.endsWith(".DSA") || u.endsWith(".EC")
-              }
-
-              private fun w16(o: java.io.OutputStream, v: Int) { o.write(v and 0xff); o.write((v shr 8) and 0xff) }
-              private fun w32(o: java.io.OutputStream, v: Long) { for (k in 0 until 4) o.write(((v shr (8 * k)) and 0xff).toInt()) }
-
-              private fun rewriteZip(src: File, dst: File, patchManifest: (ByteArray) -> ByteArray) {
-                  RandomAccessFile(src, "r").use { raf ->
-                      val ents = readEntries(raf)
-                      val written = ArrayList<Pair<Ent, Long>>() // entri baru + posisi header lokal baru
-                      val newEnts = ArrayList<Ent>()
-                      BufferedOutputStream(FileOutputStream(dst), 1 shl 16).use { out ->
-                          var off = 0L
-                          val copyBuf = ByteArray(1 shl 16)
-                          for (e in ents) {
-                              if (isSigFile(e.name)) continue
-                              var method = e.method
-                              var crc = e.crc
-                              var csize = e.csize
-                              var size = e.size
-                              var manifest: ByteArray? = null
-                              if (e.name == "AndroidManifest.xml") {
-                                  // baca manifest asli (mungkin terkompres) lalu patch
-                                  val lh = ByteArray(30)
-                                  raf.seek(e.lho); raf.readFully(lh)
-                                  val lb = ByteBuffer.wrap(lh).order(LE)
-                                  val dataOff = e.lho + 30 + u16(lb, 26) + u16(lb, 28)
-                                  val raw = ByteArray(e.csize.toInt())
-                                  raf.seek(dataOff); raf.readFully(raw)
-                                  val orig = if (e.method == 8) {
-                                      val inf = java.util.zip.Inflater(true)
-                                      inf.setInput(raw)
-                                      val bo = ByteArrayOutputStream()
-                                      val tmp = ByteArray(8192)
-                                      while (!inf.finished()) {
-                                          val n = inf.inflate(tmp)
-                                          if (n == 0 && (inf.needsInput() || inf.needsDictionary())) break
-                                          bo.write(tmp, 0, n)
-                                      }
-                                      inf.end()
-                                      bo.toByteArray()
-                                  } else raw
-                                  val patched = patchManifest(orig)
-                                  val cr = CRC32(); cr.update(patched)
-                                  manifest = patched
-                                  method = 0; crc = cr.value; csize = patched.size.toLong(); size = patched.size.toLong()
-                              }
-                              val nameBytes = e.name.toByteArray(Charsets.UTF_8)
-                              var pad = 0
-                              if (method == 0 && csize > 0) {
-                                  val align = if (e.name.endsWith(".so")) 4096 else 4
-                                  val base = off + 30 + nameBytes.size
-                                  pad = ((align - (base % align)) % align).toInt()
-                                  if (pad in 1..3) pad += align
-                              }
-                              val flags = e.flags and 0x0800
-                              // header lokal
-                              w32(out, 0x04034b50L); w16(out, 20); w16(out, flags); w16(out, method); w16(out, e.time); w16(out, e.date)
-                              w32(out, crc); w32(out, csize); w32(out, size); w16(out, nameBytes.size); w16(out, pad)
-                              out.write(nameBytes)
-                              if (pad > 0) {
-                                  w16(out, 0xD935); w16(out, pad - 4)
-                                  out.write(ByteArray(pad - 4))
-                              }
-                              val lho = off
-                              off += 30 + nameBytes.size + pad
-                              if (manifest != null) {
-                                  out.write(manifest)
-                              } else if (csize > 0) {
-                                  val lh = ByteArray(30)
-                                  raf.seek(e.lho); raf.readFully(lh)
-                                  val lb = ByteBuffer.wrap(lh).order(LE)
-                                  raf.seek(e.lho + 30 + u16(lb, 26) + u16(lb, 28))
-                                  var left = csize
-                                  while (left > 0) {
-                                      val n = raf.read(copyBuf, 0, minOf(left, copyBuf.size.toLong()).toInt())
-                                      require(n > 0) { "data ZIP terpotong" }
-                                      out.write(copyBuf, 0, n)
-                                      left -= n
-                                  }
-                              }
-                              off += csize
-                              newEnts.add(Ent(e.name, flags, method, e.time, e.date, crc, csize, size, lho))
-                          }
-                          // central directory
-                          val cdStart = off
-                          for (e in newEnts) {
-                              val nb = e.name.toByteArray(Charsets.UTF_8)
-                              w32(out, 0x02014b50L); w16(out, 20); w16(out, 20); w16(out, e.flags); w16(out, e.method)
-                              w16(out, e.time); w16(out, e.date); w32(out, e.crc); w32(out, e.csize); w32(out, e.size)
-                              w16(out, nb.size); w16(out, 0); w16(out, 0); w16(out, 0); w16(out, 0); w32(out, 0)
-                              w32(out, e.lho)
-                              out.write(nb)
-                              off += 46 + nb.size
-                          }
-                          val cdSize = off - cdStart
-                          w32(out, 0x06054b50L); w16(out, 0); w16(out, 0); w16(out, newEnts.size); w16(out, newEnts.size)
-                          w32(out, cdSize); w32(out, cdStart); w16(out, 0)
-                      }
-                  }
-              }
-          }
-
-          /** Ubah AndroidManifest.xml biner (AXML): nama paket, nama kelas relatif, authorities, izin, label. */
-          object Axml {
-              private val LE = ByteOrder.LITTLE_ENDIAN
-              private const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
-              private val COMP = setOf("application", "activity", "activity-alias", "service", "receiver", "provider", "instrumentation")
-              private val CLASS_ATTRS = setOf("name", "targetActivity", "parentActivityName", "backupAgent", "manageSpaceActivity", "appComponentFactory")
-
-              private fun under(v: String, p: String) = v == p || v.startsWith("$p.")
-
-              private fun absolutize(v: String, pkg: String): String = when {
-                  v.startsWith(".") -> pkg + v
-                  !v.contains('.') && v.isNotEmpty() -> "$pkg.$v"
-                  else -> v
-              }
-
-              fun patch(src: ByteArray, orig: String, new: String, label: String?): ByteArray {
-                  val bb = ByteBuffer.wrap(src).order(LE)
-                  require((bb.getShort(0).toInt() and 0xffff) == 0x0003) { "manifest bukan AXML" }
-                  val poolPos = 8
-                  require((bb.getShort(poolPos).toInt() and 0xffff) == 0x0001) { "string pool tidak ditemukan" }
-                  val poolSize = bb.getInt(poolPos + 4)
-                  val strCount = bb.getInt(poolPos + 8)
-                  val styleCount = bb.getInt(poolPos + 12)
-                  val flags = bb.getInt(poolPos + 16)
-                  val stringsStart = bb.getInt(poolPos + 20)
-                  require(styleCount == 0) { "style pool tidak didukung" }
-                  val utf8 = (flags and 0x100) != 0
-                  val strings = ArrayList<String>(strCount + 8)
-                  for (i in 0 until strCount) {
-                      val off = bb.getInt(poolPos + 28 + i * 4)
-                      strings.add(readStr(bb, poolPos + stringsStart + off, utf8))
-                  }
-                  val index = HashMap<String, Int>()
-                  for (i in strings.indices) index.putIfAbsent(strings[i], i)
-                  val sid = { s: String ->
-                      index.getOrPut(s) { strings.add(s); strings.size - 1 }
-                  }
-
-                  val rest = ArrayList<ByteArray>()
-                  var pos = poolPos + poolSize
-                  while (pos + 8 <= src.size) {
-                      val type = bb.getShort(pos).toInt() and 0xffff
-                      val size = bb.getInt(pos + 4)
-                      if (size <= 0 || pos + size > src.size) break
-                      val chunk = src.copyOfRange(pos, pos + size)
-                      if (type == 0x0102) patchElement(chunk, strings, sid, orig, new, label)
-                      rest.add(chunk)
-                      pos += size
-                  }
-
-                  val pool = buildPool(strings, utf8)
-                  var total = 8 + pool.size
-                  for (r in rest) total += r.size
-                  val out = ByteBuffer.allocate(total).order(LE)
-                  out.putShort(3.toShort()); out.putShort(8.toShort()); out.putInt(total)
-                  out.put(pool)
-                  for (r in rest) out.put(r)
-                  return out.array()
-              }
-
-              private fun patchElement(
-                  ch: ByteArray, strings: ArrayList<String>, sid: (String) -> Int, orig: String, new: String, label: String?
-              ) {
-                  val b = ByteBuffer.wrap(ch).order(LE)
-                  val tag = strings.getOrElse(b.getInt(20)) { "" }
-                  val attrStart = b.getShort(24).toInt() and 0xffff
-                  val attrSize = b.getShort(26).toInt() and 0xffff
-                  val attrCount = b.getShort(28).toInt() and 0xffff
-                  for (k in 0 until attrCount) {
-                      val base = 16 + attrStart + k * attrSize
-                      val ns = b.getInt(base)
-                      val attr = strings.getOrElse(b.getInt(base + 4)) { "" }
-                      val isAndroid = ns >= 0 && strings.getOrElse(ns) { "" } == ANDROID_NS
-                      val type = b.get(base + 15).toInt() and 0xff
-                      if (isAndroid && attr == "label" && label != null &&
-                          (tag == "application" || tag == "activity" || tag == "activity-alias")
-                      ) {
-                          val ni = sid(label)
-                          b.putInt(base + 8, ni); b.put(base + 15, 3.toByte()); b.putInt(base + 16, ni)
-                          continue
-                      }
-                      if (type != 3) continue
-                      val value = strings.getOrElse(b.getInt(base + 16)) { "" }
-                      val nv: String? = when {
-                          tag == "manifest" && ns < 0 && attr == "package" -> new
-                          isAndroid && tag in COMP && attr in CLASS_ATTRS -> absolutize(value, orig)
-                          isAndroid && tag == "provider" && attr == "authorities" ->
-                              value.split(';').joinToString(";") { if (it.contains(orig)) it.replace(orig, new) else "$it.$new" }
-                          isAndroid && tag == "instrumentation" && attr == "targetPackage" && value == orig -> new
-                          isAndroid && (tag == "permission" || tag == "permission-tree" || tag == "uses-permission" ||
-                              tag == "uses-permission-sdk-23") && attr == "name" && under(value, orig) -> new + value.substring(orig.length)
-                          isAndroid && (attr == "permission" || attr == "readPermission" || attr == "writePermission") &&
-                              under(value, orig) -> new + value.substring(orig.length)
-                          isAndroid && (attr == "process" || attr == "taskAffinity") && under(value, orig) -> new + value.substring(orig.length)
-                          else -> null
-                      }
-                      if (nv != null && nv != value) {
-                          val ni = sid(nv)
-                          b.putInt(base + 8, ni); b.putInt(base + 16, ni)
-                      }
-                  }
-              }
-
-              private fun readStr(bb: ByteBuffer, p0: Int, utf8: Boolean): String {
-                  var p = p0
-                  if (utf8) {
-                      var l = bb.get(p++).toInt() and 0xff
-                      if ((l and 0x80) != 0) l = ((l and 0x7f) shl 8) or (bb.get(p++).toInt() and 0xff)
-                      var bl = bb.get(p++).toInt() and 0xff
-                      if ((bl and 0x80) != 0) bl = ((bl and 0x7f) shl 8) or (bb.get(p++).toInt() and 0xff)
-                      val arr = ByteArray(bl)
-                      for (i in 0 until bl) arr[i] = bb.get(p + i)
-                      return String(arr, Charsets.UTF_8)
-                  }
-                  var l = bb.getShort(p).toInt() and 0xffff
-                  p += 2
-                  if ((l and 0x8000) != 0) {
-                      l = ((l and 0x7fff) shl 16) or (bb.getShort(p).toInt() and 0xffff)
-                      p += 2
-                  }
-                  val sb = StringBuilder(l)
-                  for (i in 0 until l) sb.append((bb.getShort(p + i * 2).toInt() and 0xffff).toChar())
-                  return sb.toString()
-              }
-
-              private fun w16(o: ByteArrayOutputStream, v: Int) { o.write(v and 0xff); o.write((v shr 8) and 0xff) }
-
-              private fun buildPool(strs: List<String>, utf8: Boolean): ByteArray {
-                  val data = ByteArrayOutputStream()
-                  val offs = IntArray(strs.size)
-                  for ((i, s) in strs.withIndex()) {
-                      offs[i] = data.size()
-                      if (utf8) {
-                          val bytes = s.toByteArray(Charsets.UTF_8)
-                          for (n in intArrayOf(s.length, bytes.size)) {
-                              if (n > 0x7f) { data.write((n shr 8) or 0x80); data.write(n and 0xff) } else data.write(n)
-                          }
-                          data.write(bytes); data.write(0)
-                      } else {
-                          if (s.length > 0x7fff) { w16(data, (s.length shr 16) or 0x8000); w16(data, s.length and 0xffff) } else w16(data, s.length)
-                          for (ch in s) w16(data, ch.code)
-                          w16(data, 0)
-                      }
-                  }
-                  while (data.size() % 4 != 0) data.write(0)
-                  val stringsStart = 28 + strs.size * 4
-                  val size = stringsStart + data.size()
-                  val bb = ByteBuffer.allocate(size).order(LE)
-                  bb.putShort(1.toShort()); bb.putShort(28.toShort()); bb.putInt(size)
-                  bb.putInt(strs.size); bb.putInt(0); bb.putInt(if (utf8) 0x100 else 0); bb.putInt(stringsStart); bb.putInt(0)
-                  for (o in offs) bb.putInt(o)
-                  bb.put(data.toByteArray())
-                  return bb.array()
-              }
-          }
-          RZX_EOF
-          mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/CloneQueue.kt')"
-          cat > 'app/src/main/java/com/rizzxy/store/CloneQueue.kt' <<'RZX_EOF'
-          package com.rizzxy.store
-
-          import android.app.PendingIntent
-          import android.content.BroadcastReceiver
-          import android.content.Context
-          import android.content.Intent
-          import android.content.IntentSender
-          import android.content.pm.PackageInstaller
-          import android.os.Build
-          import android.os.Handler
-          import android.os.Looper
-          import java.io.File
-
-          /** Antrean install / uninstall clone satu per satu. Tiap paket menunggu hasil sebelum lanjut ke berikutnya. */
-          object CloneQueue {
-              private const val ACTION = "com.rizzxy.store.CLONE_RESULT"
-
-              private class Job(val install: Boolean, val pkg: String, val label: String)
-
-              private val jobs = java.util.ArrayDeque<Job>()
-              private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
-              private val main = Handler(Looper.getMainLooper())
-              private var app: Context? = null
-              private var current: Job? = null
-              private var srcPkg = ""
-              private var workDir: File? = null
-
-              @Volatile var running = false
-                  private set
-              var onLog: ((String) -> Unit)? = null
-
-              fun log(m: String) { main.post { onLog?.invoke(m) } }
-
-              // ===== daftar clone yang dibuat app ini (supaya uninstall tidak menyentuh app lain) =====
-              private fun sp(c: Context) = c.getSharedPreferences("clone", Context.MODE_PRIVATE)
-              fun recorded(c: Context): Set<String> = sp(c).getStringSet("list", emptySet()) ?: emptySet()
-              private fun record(c: Context, pkg: String) =
-                  sp(c).edit().putStringSet("list", recorded(c) + pkg).apply()
-              private fun unrecord(c: Context, pkg: String) =
-                  sp(c).edit().putStringSet("list", recorded(c) - pkg).apply()
-
-              fun isInstalled(c: Context, pkg: String): Boolean = try {
-                  c.packageManager.getPackageInfo(pkg, 0); true
-              } catch (e: Exception) { false }
-
-              /** Clone yang tercatat dan masih terpasang. */
-              fun installedClones(c: Context): List<String> = recorded(c).filter { isInstalled(c, it) }.sorted()
-
-              // ===== mulai =====
-              fun startInstall(c: Context, src: String, items: List<Pair<String, String>>) {
-                  if (running) { log("Masih berjalan, tunggu selesai."); return }
-                  app = c.applicationContext
-                  srcPkg = src
-                  jobs.clear()
-                  items.forEach { jobs.add(Job(true, it.first, it.second)) }
-                  running = true
-                  next()
-              }
-
-              fun startUninstall(c: Context, pkgs: List<String>) {
-                  if (running) { log("Masih berjalan, tunggu selesai."); return }
-                  app = c.applicationContext
-                  jobs.clear()
-                  pkgs.forEach { jobs.add(Job(false, it, "")) }
-                  running = true
-                  next()
-              }
-
-              fun stop() {
-                  jobs.clear()
-                  running = false
-                  log("Antrean dihentikan.")
-              }
-
-              // ===== jalan satu per satu =====
-              private fun next() {
-                  val c = app ?: return
-                  val j = jobs.poll()
-                  current = j
-                  if (j == null) {
-                      running = false
-                      log("SELESAI.")
-                      return
-                  }
-                  if (j.install) {
-                      io.execute {
-                          try {
-                              if (isInstalled(c, j.pkg)) {
-                                  log("SKIP ${j.pkg} (sudah terpasang)")
-                                  main.post { next() }
-                                  return@execute
-                              }
-                              log("Membuat ${j.pkg} ...")
-                              val dir = File(c.cacheDir, "clone_${j.pkg}")
-                              dir.deleteRecursively(); dir.mkdirs()
-                              workDir = dir
-                              val files = Cloner.build(c, srcPkg, j.pkg, j.label, dir)
-                              log("Install ${j.pkg}: ketuk INSTALL di layar.")
-                              commit(c, j.pkg, files)
-                          } catch (e: Throwable) {
-                              log("GAGAL ${j.pkg}: ${e.message ?: e.javaClass.simpleName}")
-                              main.post { cleanup(); next() }
-                          }
-                      }
-                  } else {
-                      try {
-                          log("Uninstall ${j.pkg}: ketuk OK di layar.")
-                          c.packageManager.packageInstaller.uninstall(j.pkg, sender(c))
-                      } catch (e: Throwable) {
-                          log("GAGAL uninstall ${j.pkg}: ${e.message ?: e.javaClass.simpleName}")
-                          next()
-                      }
-                  }
-              }
-
-              private fun commit(c: Context, pkg: String, files: List<File>) {
-                  val pi = c.packageManager.packageInstaller
-                  val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-                  params.setAppPackageName(pkg)
-                  val id = pi.createSession(params)
-                  pi.openSession(id).use { s ->
-                      for (f in files) {
-                          f.inputStream().use { inp ->
-                              s.openWrite(f.name, 0, f.length()).use { out ->
-                                  inp.copyTo(out)
-                                  s.fsync(out)
-                              }
-                          }
-                      }
-                      s.commit(sender(c))
-                  }
-              }
-
-              private fun sender(c: Context): IntentSender {
-                  val i = Intent(c, CloneReceiver::class.java).setAction(ACTION)
-                  val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-                  return PendingIntent.getBroadcast(c, 77, i, flags).intentSender
-              }
-
-              private fun cleanup() {
-                  try { workDir?.deleteRecursively() } catch (e: Throwable) {}
-                  workDir = null
-              }
-
-              /** Dipanggil receiver: hasil dari sistem untuk session install/uninstall. */
-              fun handleResult(c: Context, i: Intent) {
-                  val status = i.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)
-                  val msg = i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
-                  if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
-                      @Suppress("DEPRECATION")
-                      val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33)
-                          i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-                      else i.getParcelableExtra(Intent.EXTRA_INTENT)
-                      if (confirm != null) {
-                          confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                          try { c.startActivity(confirm) } catch (e: Throwable) { log("Gagal membuka dialog: ${e.message}") }
-                      }
-                      return
-                  }
-                  val j = current ?: return
-                  val app = c.applicationContext
-                  when (status) {
-                      PackageInstaller.STATUS_SUCCESS -> {
-                          if (j.install) { record(app, j.pkg); log("OK  ${j.pkg} terpasang") }
-                          else { unrecord(app, j.pkg); log("OK  ${j.pkg} dihapus") }
-                          cleanup(); next()
-                      }
-                      PackageInstaller.STATUS_FAILURE_ABORTED -> {
-                          log("Dibatalkan di ${j.pkg}. Antrean dihentikan.")
-                          cleanup(); jobs.clear(); current = null; running = false
-                      }
-                      else -> {
-                          log("GAGAL ${j.pkg}: ${if (msg.isNotEmpty()) msg else "kode $status"}")
-                          cleanup(); next()
-                      }
-                  }
-              }
-          }
-
-          class CloneReceiver : BroadcastReceiver() {
-              override fun onReceive(context: Context, intent: Intent) {
-                  CloneQueue.handleResult(context, intent)
               }
           }
           RZX_EOF
@@ -1766,27 +1169,6 @@ jobs:
                   autoCard.addView(softBtn("START") { startRun() })
                   serverPane.addView(autoCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
 
-                  // kartu CLONE APK
-                  val cloneCard = LinearLayout(this).apply {
-                      orientation = LinearLayout.HORIZONTAL
-                      gravity = Gravity.CENTER_VERTICAL
-                      background = shape(card, 16, 1, line)
-                      setPadding(dp(12), dp(12), dp(12), dp(12))
-                      setOnClickListener { openCloneDialog() }
-                  }
-                  val cloneIcon = vecIcon(R.drawable.ic_reset, cyan, 10).apply {
-                      background = shape(cardDark, 12, 1, line)
-                  }
-                  cloneCard.addView(cloneIcon, LinearLayout.LayoutParams(dp(44), dp(44)))
-                  val cloneTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                  cloneTexts.addView(tv("CLONE APK", 13f, white, true).apply { setSingleLine() })
-                  cloneTexts.addView(tv("Salin aplikasi otomatis, maks 10", 10f, muted).apply { setSingleLine() })
-                  cloneCard.addView(cloneTexts, LinearLayout.LayoutParams(0, -2, 1f).apply {
-                      leftMargin = dp(12); rightMargin = dp(8)
-                  })
-                  cloneCard.addView(softBtn("BUKA") { openCloneDialog() })
-                  serverPane.addView(cloneCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
-
                   serverPane.addView(colorBtn("CLOSE APK", 0xFF7F1D1D.toInt()) { closeRun() },
                       LinearLayout.LayoutParams(-1, dp(46)).apply { topMargin = dp(8) })
 
@@ -2085,125 +1467,6 @@ jobs:
                   row.addView(tv(sub, 10f, muted).apply { setPadding(0, dp(2), 0, 0) })
                   pressFx(row)
                   return row
-              }
-
-              // ===== CLONE APK =====
-
-              private fun openCloneDialog() {
-                  val sp = getSharedPreferences("clone", MODE_PRIVATE)
-                  var src = sp.getString("src", "") ?: ""
-                  var prefix = sp.getString("prefix", "com.mobile.") ?: "com.mobile."
-                  var count = sp.getInt("count", 5).coerceIn(1, 10)
-                  val lines = ArrayList<String>()
-                  fancyDialog("CLONE APK", "SALIN APLIKASI JADI BANYAK PAKET", R.drawable.ic_reset) { box, d ->
-                      fun gap(top: Int) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(top) }
-                      val ctx = this@MainActivity
-
-                      box.addView(tv("1. APLIKASI SUMBER", 11f, cyan, true), gap(16))
-                      val srcTv = tv("", 12f, white, true).apply { setPadding(dp(2), dp(6), 0, dp(6)) }
-                      box.addView(srcTv)
-
-                      val prefixEt = field("PREFIX PAKET (contoh: com.mobile.)", false)
-                      prefixEt.setText(prefix)
-                      val countTv = tv("", 18f, white, true).apply { gravity = Gravity.CENTER }
-                      val prevTv = tv("", 10f, muted)
-
-                      fun render() {
-                          srcTv.text = if (src.isEmpty()) "Belum dipilih" else {
-                              val lbl = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(src, 0)).toString() } catch (e: Exception) { src }
-                              "$lbl\n$src"
-                          }
-                          countTv.text = "$count CLONE"
-                          prevTv.text = if (!Cloner.validPrefix(prefix)) "Prefix paket tidak valid"
-                          else Cloner.names(prefix, count, src).joinToString(", ")
-                      }
-
-                      box.addView(softBtn("PILIH APLIKASI SUMBER") {
-                          val pm = packageManager
-                          val mine = CloneQueue.recorded(ctx)
-                          val apps = pm.getInstalledApplications(0)
-                              .filter { (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 && it.packageName != packageName && it.packageName !in mine }
-                              .map { pm.getApplicationLabel(it).toString() to it.packageName }
-                              .sortedBy { it.first.lowercase() }
-                          val dlg = AlertDialog.Builder(ctx).setTitle("PILIH APLIKASI SUMBER")
-                              .setItems(apps.map { it.first + "\n" + it.second }.toTypedArray()) { _, w -> src = apps[w].second; render() }
-                              .setNegativeButton("BATAL", null).create()
-                          dlg.show(); themeDialog(dlg)
-                      }, gap(4))
-
-                      box.addView(tv("2. NAMA PAKET CLONE", 11f, cyan, true), gap(16))
-                      box.addView(prefixEt, gap(6))
-                      prefixEt.addTextChangedListener(object : TextWatcher {
-                          override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                          override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                          override fun afterTextChanged(s: Editable?) { prefix = s.toString().trim().lowercase(); render() }
-                      })
-
-                      box.addView(tv("3. JUMLAH CLONE (MAKS 10)", 11f, cyan, true), gap(16))
-                      val cnt = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                      cnt.addView(softBtn("-") { count = (count - 1).coerceAtLeast(1); render() }, LinearLayout.LayoutParams(dp(64), -2))
-                      cnt.addView(countTv, LinearLayout.LayoutParams(0, -2, 1f))
-                      cnt.addView(softBtn("+") { count = (count + 1).coerceAtMost(10); render() }, LinearLayout.LayoutParams(dp(64), -2))
-                      box.addView(cnt, gap(6))
-                      box.addView(prevTv, gap(8))
-
-                      val install = tv("INSTALL SEMUA", 14f, Theme.t(0xFF1E0B3A.toInt()), true).apply {
-                          gravity = Gravity.CENTER
-                          background = shape(cyan, 16)
-                          setOnClickListener {
-                              if (src.isEmpty()) { toast("Pilih aplikasi sumber dulu"); return@setOnClickListener }
-                              if (!Cloner.validPrefix(prefix)) { toast("Prefix paket tidak valid"); return@setOnClickListener }
-                              if (!packageManager.canRequestPackageInstalls()) {
-                                  toast("Izinkan install dari aplikasi ini, lalu coba lagi")
-                                  startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
-                                  return@setOnClickListener
-                              }
-                              sp.edit().putString("src", src).putString("prefix", prefix).putInt("count", count).apply()
-                              val lbl = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(src, 0)).toString() } catch (e: Exception) { src }
-                              val items = Cloner.names(prefix, count, src).map { it to lbl + " " + it.substringAfterLast('.').uppercase() }
-                              lines.clear()
-                              CloneQueue.startInstall(ctx, src, items)
-                          }
-                      }
-                      pressFx(install)
-                      box.addView(install, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(18) })
-
-                      val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-                      val un = tv("UNINSTALL SEMUA", 12f, Theme.t(0xFFF0ABFC.toInt()), true).apply {
-                          gravity = Gravity.CENTER
-                          background = shape(cardDark, 16, 1, Theme.t(0xFF24173D.toInt()))
-                          setOnClickListener {
-                              val list = CloneQueue.installedClones(ctx)
-                              if (list.isEmpty()) { toast("Tidak ada clone terpasang"); return@setOnClickListener }
-                              val cd = AlertDialog.Builder(ctx)
-                                  .setTitle("UNINSTALL " + list.size + " CLONE?")
-                                  .setMessage(list.joinToString("\n"))
-                                  .setNegativeButton("BATAL", null)
-                                  .setPositiveButton("UNINSTALL") { _, _ -> lines.clear(); CloneQueue.startUninstall(ctx, list) }
-                                  .create()
-                              cd.show(); themeDialog(cd)
-                          }
-                      }
-                      val stop = tv("HENTIKAN", 12f, Theme.t(0xFFDDD6FE.toInt()), true).apply {
-                          gravity = Gravity.CENTER
-                          background = shape(cardDark, 16, 1, Theme.t(0xFF24173D.toInt()))
-                          setOnClickListener { CloneQueue.stop() }
-                      }
-                      pressFx(un); pressFx(stop)
-                      row.addView(un, LinearLayout.LayoutParams(0, dp(46), 1.4f).apply { rightMargin = dp(5) })
-                      row.addView(stop, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(5) })
-                      box.addView(row, gap(10))
-
-                      val logTv = tv("Siap. Tiap clone akan minta ketuk INSTALL satu per satu.", 10f, muted)
-                      box.addView(logTv, gap(12))
-                      CloneQueue.onLog = { m ->
-                          lines.add(m)
-                          while (lines.size > 8) lines.removeAt(0)
-                          logTv.text = lines.joinToString("\n")
-                      }
-                      d.setOnDismissListener { CloneQueue.onLog = null }
-                      render()
-                  }
               }
 
               private fun openProfileMenu() {
@@ -2767,7 +2030,7 @@ jobs:
                   nickBox.addView(timeBox)
                   box.addView(nickBox, LinearLayout.LayoutParams(-1, -2))
 
-                  // 2C. HOME ANTAR SERVER (anti relog): tiap server dibuka, tunggu sebentar, lalu pencet Home biar diparkir ke background sebelum server berikutnya dibuka.
+                  // 2C. HOME ANTAR SERVER: habis waktu RUN server dibuka -> Home -> jeda -> server berikutnya.
                   box.addView(label("2C. HOME ANTAR SERVER (ANTI RELOG):"))
                   val homeBox = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -2783,14 +2046,14 @@ jobs:
                   homeBox.addView(homeRow)
                   val homeHint = tv("", 10f, muted).apply { setPadding(dp(2), dp(8), dp(2), dp(4)) }
                   homeBox.addView(homeHint)
-                  val homeDelayWrap = delayBlock("DETIK SEBELUM PENCET HOME (1-10s):", listOf(1, 2, 3, 5, 8, 10), 1, { homeDelay }, { homeDelay = it }, 10)
+                  val homeDelayWrap = delayBlock("JEDA DI HOME SEBELUM APK BERIKUTNYA (1-5s):", listOf(1, 2, 3, 4, 5), 1, { homeDelay }, { homeDelay = it }, 5)
                   homeBox.addView(homeDelayWrap, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
                   box.addView(homeBox, LinearLayout.LayoutParams(-1, -2))
                   renders.add {
                       homeChips.forEachIndexed { i, c -> styleChip(c, (i == 1) == homeOn) }
                       homeDelayWrap.visibility = if (homeOn) View.VISIBLE else View.GONE
                       homeHint.text = if (homeOn)
-                          "Tiap server dibuka: tunggu sekian detik lalu otomatis Home (diparkir ke background) sebelum server berikutnya dibuka. Butuh izin ACCESSIBILITY aktif."
+                          "Server dibuka sampai waktu RUN-nya habis, lalu otomatis Home dan diam di Home sekian detik, baru server berikutnya dibuka. Butuh izin ACCESSIBILITY aktif (atau root)."
                       else
                           "Mati. Server dibiarkan di layar depan seperti biasa (berisiko ikut ke-relog kalau server berikutnya langsung dibuka)."
                   }
@@ -3979,7 +3242,7 @@ jobs:
                   val d2 = intent.getIntExtra(EXTRA_D2, 16)
                   val closeEnd = intent.getBooleanExtra(EXTRA_CLOSE_END, false)
                   val homeOn = intent.getBooleanExtra(EXTRA_HOME_ON, true)
-                  val homeDelay = intent.getIntExtra(EXTRA_HOME_DELAY, 3).coerceIn(1, 10)
+                  val homeDelay = intent.getIntExtra(EXTRA_HOME_DELAY, 3).coerceIn(1, 5)
                   running = true
                   stopFlag = false
                   paused = false
@@ -4045,14 +3308,9 @@ jobs:
                           continue
                       }
                       opened.add(p)
-                      val hWait1 = (homeDelay * 1000L).coerceAtMost(d1 * 1000L)
-                      if (!sleepMs(hWait1)) break@loop1
-                      if (homeOn) {
-                          AutoService.pressHome()
-                          log("HOME $p (parkir ke background)")
-                      }
-                      val rest1 = d1 * 1000L - hWait1
-                      if (rest1 > 0 && !sleepMs(rest1)) break@loop1
+                      // alur: buka server -> diam sampai waktu RUN 1 habis -> Home -> jeda di Home -> server berikutnya
+                      if (!sleepMs(d1 * 1000L)) break@loop1
+                      if (homeOn && !goHome(p, homeDelay)) break@loop1
                   }
                   // nick setelah RUN 1 (sebelum RUN 2), kalau dipilih
                   if (nickRun == 1) nickPhase()
@@ -4068,14 +3326,9 @@ jobs:
                               log("SKIP $p")
                               continue
                           }
-                          val hWait2 = (homeDelay * 1000L).coerceAtMost(delay2 * 1000L)
-                          if (!sleepMs(hWait2)) break@loop2
-                          if (homeOn) {
-                              AutoService.pressHome()
-                              log("HOME $p (parkir ke background)")
-                          }
-                          val rest2 = delay2 * 1000L - hWait2
-                          if (rest2 > 0 && !sleepMs(rest2)) break@loop2
+                          // alur: buka server -> diam sampai waktu RUN 2 habis -> Home -> jeda di Home -> server berikutnya
+                          if (!sleepMs(delay2 * 1000L)) break@loop2
+                          if (homeOn && !goHome(p, homeDelay)) break@loop2
                       }
                   }
                   // stopFlag hanya false di sini kalau RUN 2 benar-benar sampai kelar
@@ -4087,6 +3340,25 @@ jobs:
                   }
                   log(if (stopFlag) "STOPPED" else "DONE")
                   ui.postDelayed({ stopSelf() }, 2500)
+              }
+
+              /** Balik ke home screen HP (Aksesibilitas -> root -> intent Home), lalu diam di Home selama pauseSec detik (1-5) sebelum server berikutnya dibuka. false kalau dihentikan. */
+              private fun goHome(p: String, pauseSec: Int): Boolean {
+                  var ok = AutoService.pressHome()
+                  if (!ok) {
+                      ok = try {
+                          startActivity(
+                              Intent(Intent.ACTION_MAIN)
+                                  .addCategory(Intent.CATEGORY_HOME)
+                                  .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                          )
+                          true
+                      } catch (e: Exception) {
+                          false
+                      }
+                  }
+                  log(if (ok) "HOME $p (jeda ${pauseSec}s)" else "HOME GAGAL $p")
+                  return sleepMs(pauseSec * 1000L)
               }
 
               /** Panel overlay tidak boleh menangkap ketukan otomatis di area yang sama. */
@@ -5172,7 +4444,7 @@ jobs:
           /**
            * HomeToggleController
            * ---------------------
-           * Kontrol per-slot (per app/clone) untuk fitur:
+           * Kontrol per-slot (per app) untuk fitur:
            *   1) homeEnabled -> apakah setelah dibuka, tombol Home otomatis ditekan
            *      (slot diparkir ke background supaya tidak ikut ter-relog saat
            *      slot lain dibuka).
