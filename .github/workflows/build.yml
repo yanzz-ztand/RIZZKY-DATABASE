@@ -88,9 +88,6 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
               <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
-              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
               <application
                   android:allowBackup="false"
@@ -673,276 +670,6 @@ jobs:
               }
           }
           RZX_EOF
-          mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/Lock.kt')"
-          cat > 'app/src/main/java/com/rizzxy/store/Lock.kt' <<'RZX_EOF'
-          package com.rizzxy.store
-
-          import android.content.Context
-          import android.provider.Settings
-          import org.json.JSONObject
-          import java.net.HttpURLConnection
-          import java.net.URL
-          import java.security.MessageDigest
-
-          /**
-           * KUNCI AKSES ONLINE: TOKEN DIPERIKSA KE SERVER.
-           * TOKEN DIATUR LEWAT HALAMAN ADMIN: KEDALUWARSA, KUNCI PERANGKAT, DLL.
-           * STATUS AKTIF DISIMPAN DI DATA APP; APP MEMERIKSA ULANG KE SERVER SECARA BERKALA.
-           */
-          object Lock {
-              /** ALAMAT SERVER (BASE64). JALUR: /user = CEK TOKEN, /token = PANEL ADMIN. */
-              private const val SRV = "aHR0cHM6Ly9yaXp6a3ktZGIudmVyY2VsLmFwcA=="
-
-              private fun base(): String =
-                  String(android.util.Base64.decode(SRV, android.util.Base64.DEFAULT), Charsets.UTF_8).trim()
-
-              /** Boleh offline maksimal 72 jam sejak verifikasi sukses terakhir. */
-              private const val GRACE_MS = 72L * 3600_000L
-
-              /** Periksa ulang ke server paling sering tiap 5 menit. */
-              private const val RECHECK_MS = 5L * 60_000L
-
-              /** net = true berarti gagal karena jaringan/server (bukan penolakan token). */
-              class Result(
-                  val ok: Boolean,
-                  val exp: Long = 0L,
-                  val reason: String = "",
-                  val net: Boolean = false,
-                  val id: String = "",
-                  val name: String = ""
-              )
-
-              private fun clean(s: String): String = if (s == "null") "" else s.trim()
-
-              private fun sp(c: Context) = c.getSharedPreferences("lock", Context.MODE_PRIVATE)
-
-              /** Waktu efektif: jam HP tidak bisa dimundurkan untuk memperpanjang token. */
-              private fun nowMs(c: Context): Long {
-                  val p = sp(c)
-                  val last = p.getLong("seen", 0L)
-                  val eff = maxOf(System.currentTimeMillis(), last)
-                  if (eff > last) p.edit().putLong("seen", eff).apply()
-                  return eff
-              }
-
-              /**
-               * ID perangkat: DIACAK SEKALI di HP ini lalu tetap (tidak berubah walau APK di-update).
-               * Disimpan di data app dan di file token_rizky; kalau data app terhapus, ID lama dipulihkan dari file.
-               */
-              fun deviceId(c: Context): String {
-                  val p = sp(c)
-                  IdCfg.readDevice(c)?.let {
-                      if (p.getString("devid", "") != it) p.edit().putString("devid", it).apply()
-                      return it
-                  }
-                  val saved = p.getString("devid", "") ?: ""
-                  if (saved.matches(Regex("[0-9A-F]{4}-[0-9A-F]{4}"))) return saved
-                  val b = ByteArray(4)
-                  java.security.SecureRandom().nextBytes(b)
-                  val hex = b.joinToString("") { "%02X".format(it) }
-                  val id = hex.substring(0, 4) + "-" + hex.substring(4, 8)
-                  p.edit().putString("devid", id).apply()
-                  return id
-              }
-
-              /** Periksa token ke server. Panggil dari thread background. */
-              fun verify(c: Context, token: String): Result {
-                  return try {
-                      val con = URL(base() + "/user").openConnection() as HttpURLConnection
-                      con.requestMethod = "POST"
-                      con.connectTimeout = 10000
-                      con.readTimeout = 15000
-                      con.doOutput = true
-                      con.setRequestProperty("Content-Type", "application/json")
-                      val body = JSONObject().put("token", token).put("device", deviceId(c)).toString()
-                      con.outputStream.use { it.write(body.toByteArray()) }
-                      val code = con.responseCode
-                      val stream = if (code in 200..299) con.inputStream else con.errorStream
-                      val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-                      con.disconnect()
-                      val j = try { JSONObject(text) } catch (e: Exception) { null }
-                      if (j == null) {
-                          Result(false, reason = "Server tidak merespons dengan benar ($code)", net = true)
-                      } else if (j.optBoolean("ok")) {
-                          Result(true, j.optLong("exp", 0L), id = clean(j.optString("id", "")), name = clean(j.optString("name", "")))
-                      } else {
-                          Result(false, reason = j.optString("reason", "Token ditolak"), net = j.optBoolean("temp", false))
-                      }
-                  } catch (e: Exception) {
-                      Result(false, reason = "Tidak bisa terhubung ke server. Periksa internet.", net = true)
-                  }
-              }
-
-              private fun lockOut(p: android.content.SharedPreferences, note: String) {
-                  p.edit().putBoolean("ok", false).putString("note", note).apply()
-              }
-
-              fun isUnlocked(c: Context): Boolean {
-                  val p = sp(c)
-                  if (!p.getBoolean("v4", false)) {
-                      // buang status dari skema lama (token offline)
-                      p.edit().putBoolean("v4", true).putBoolean("ok", false).apply()
-                  }
-                  if (!p.getBoolean("ok", false)) return false
-                  val now = nowMs(c)
-                  val exp = p.getLong("exp", 0L)
-                  if (exp > 0L && now > exp) {
-                      lockOut(p, "Token kedaluwarsa, masukkan token baru.")
-                      return false
-                  }
-                  if (now - p.getLong("lastOk", 0L) > GRACE_MS) {
-                      lockOut(p, "Terlalu lama offline. Sambungkan internet lalu masukkan token lagi.")
-                      return false
-                  }
-                  return true
-              }
-
-              /** Simpan token yang sudah terverifikasi. */
-              fun save(c: Context, token: String, exp: Long, id: String = "", name: String = "") {
-                  val now = nowMs(c)
-                  sp(c).edit()
-                      .putBoolean("ok", true)
-                      .putString("token", token.trim())
-                      .putString("id", id)
-                      .putString("name", name)
-                      .putLong("exp", exp)
-                      .putLong("lastOk", now)
-                      .putLong("checked", now)
-                      .remove("note")
-                      .apply()
-                  IdCfg.write(c, token.trim())
-              }
-
-              /** ID token untuk ditampilkan: dari server kalau ada, kalau tidak 8 huruf pertama token. */
-              fun tokenId(c: Context): String {
-                  val p = sp(c)
-                  val id = p.getString("id", "") ?: ""
-                  if (id.isNotEmpty()) return id.uppercase()
-                  val t = (p.getString("token", "") ?: "").trim()
-                  if (t.isEmpty()) return "-"
-                  return (if (t.length <= 10) t else t.substring(0, 8)).uppercase()
-              }
-
-              fun expMs(c: Context): Long = sp(c).getLong("exp", 0L)
-
-              fun storedToken(c: Context): String = sp(c).getString("token", "") ?: ""
-
-              fun serverName(c: Context): String = sp(c).getString("name", "") ?: ""
-
-              /** Pesan alasan terkunci (sekali pakai), atau string kosong. */
-              fun takeNote(c: Context): String {
-                  val p = sp(c)
-                  val n = p.getString("note", "") ?: ""
-                  if (n.isNotEmpty()) p.edit().remove("note").apply()
-                  return n
-              }
-
-              /**
-               * Periksa ulang token di server (maks tiap 5 menit). Kalau server menolak
-               * (dinonaktifkan / kedaluwarsa / dihapus), kunci lagi dan panggil onLocked.
-               * Gagal jaringan tidak mengunci app (ada toleransi offline 72 jam).
-               */
-              fun revalidate(c: Context, onLocked: () -> Unit) {
-                  val p = sp(c)
-                  if (!p.getBoolean("ok", false)) return
-                  val now = nowMs(c)
-                  if (now - p.getLong("checked", 0L) < RECHECK_MS) return
-                  p.edit().putLong("checked", now).apply()
-                  val token = p.getString("token", "") ?: ""
-                  Thread {
-                      val r = verify(c, token)
-                      if (r.ok) {
-                          val e = sp(c).edit().putLong("exp", r.exp).putLong("lastOk", nowMs(c))
-                          if (r.id.isNotEmpty()) e.putString("id", r.id)
-                          if (r.name.isNotEmpty()) e.putString("name", r.name)
-                          e.apply()
-                      } else if (!r.net) {
-                          lockOut(sp(c), r.reason)
-                          onLocked()
-                      }
-                  }.start()
-              }
-          }
-          RZX_EOF
-          mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/IdCfg.kt')"
-          cat > 'app/src/main/java/com/rizzxy/store/IdCfg.kt' <<'RZX_EOF'
-          package com.rizzxy.store
-
-          import android.content.Context
-          import android.content.pm.PackageManager
-          import android.os.Build
-          import android.os.Environment
-          import java.io.File
-
-          /**
-           * Cadangan token + ID device di penyimpanan utama: /storage/emulated/0/token_rizky
-           * Tetap ada walau data app dihapus. Dipakai untuk pulih otomatis (token tetap diperiksa ulang ke server).
-           */
-          object IdCfg {
-              @Volatile var tried = false
-              @Volatile var asked = false
-
-              private fun file() = File(Environment.getExternalStorageDirectory(), "token_rizky")
-
-              fun canAccess(c: Context): Boolean =
-                  if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
-                  else c.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-
-              fun write(c: Context, token: String) {
-                  if (token.isEmpty() || !canAccess(c)) return
-                  try {
-                      val text = "# RIZZXY STORE - jangan dibagikan\n" +
-                          "device=" + Lock.deviceId(c) + "\n" +
-                          "token=" + token + "\n"
-                      val f = file()
-                      if (f.exists() && f.readText() == text) return
-                      f.writeText(text)
-                  } catch (e: Exception) {
-                  }
-              }
-
-              /** Token dari token_rizky. Kalau ada baris device=, harus sama dengan HP ini. Isi polos (hanya token) juga terbaca. */
-              fun read(c: Context): String? {
-                  if (!canAccess(c)) return null
-                  return try {
-                      val f = file()
-                      if (!f.exists()) return null
-                      var dev = ""
-                      var tok = ""
-                      f.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }.forEach {
-                          when {
-                              it.startsWith("device=") -> dev = it.substring(7).trim()
-                              it.startsWith("token=") -> tok = it.substring(6).trim()
-                              tok.isEmpty() -> tok = it
-                          }
-                      }
-                      if (tok.isNotEmpty() && (dev.isEmpty() || dev == Lock.deviceId(c))) tok else null
-                  } catch (e: Exception) {
-                      null
-                  }
-              }
-
-              /** ID device dari baris device= di token_rizky (kalau file bisa dibaca dan formatnya benar). */
-              fun readDevice(c: Context): String? {
-                  if (!canAccess(c)) return null
-                  return try {
-                      val f = file()
-                      if (!f.exists()) return null
-                      val d = f.readLines().map { it.trim() }.firstOrNull { it.startsWith("device=") }
-                          ?.substring(7)?.trim()?.uppercase() ?: return null
-                      if (d.matches(Regex("[0-9A-F]{4}-[0-9A-F]{4}"))) d else null
-                  } catch (e: Exception) {
-                      null
-                  }
-              }
-
-              /** Pastikan token_rizky ada dan terbaru selama app sedang terbuka (sudah login). */
-              fun backup(c: Context) {
-                  if (!Lock.isUnlocked(c)) return
-                  write(c, Lock.storedToken(c))
-              }
-          }
-          RZX_EOF
           mkdir -p "$(dirname 'app/src/main/java/com/rizzxy/store/MainActivity.kt')"
           cat > 'app/src/main/java/com/rizzxy/store/MainActivity.kt' <<'RZX_EOF'
           package com.rizzxy.store
@@ -1043,6 +770,7 @@ jobs:
               private lateinit var profName: TextView
               private lateinit var profDev: TextView
               private lateinit var profTok: TextView
+              private lateinit var profBat: TextView
               private var settingsStatus: TextView? = null
               private var settingsBtn: Button? = null
               private var autoDone = false
@@ -1060,14 +788,6 @@ jobs:
                   setContentView(ui)
                   fxTree(ui)
                   refreshProfile(true)
-                  if (!Lock.isUnlocked(this)) {
-                      ui.visibility = View.INVISIBLE
-                      showLock(ui)
-                  } else {
-                      Lock.revalidate(this) { runOnUiThread { recreate() } }
-                      IdCfg.backup(this)
-                  }
-                  askStorage()
                   if (Build.VERSION.SDK_INT >= 33 &&
                       checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
                   ) {
@@ -1079,91 +799,6 @@ jobs:
                   loadAppsAsync { refresh() }
               }
 
-              /** Minta izin akses file supaya token_rizky bisa ditulis/dibaca (sekali per sesi). */
-              private fun askStorage() {
-                  if (IdCfg.canAccess(this) || IdCfg.asked) return
-                  IdCfg.asked = true
-                  val d = AlertDialog.Builder(this)
-                      .setTitle("SIMPAN ID DEVICE")
-                      .setMessage("Izinkan akses semua file supaya token dan ID device disimpan di file token_rizky (penyimpanan utama). Kalau data app terhapus, login pulih otomatis.")
-                      .setNegativeButton("NANTI", null)
-                      .setPositiveButton("IZINKAN") { _, _ ->
-                          if (Build.VERSION.SDK_INT >= 30) {
-                              try {
-                                  startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
-                              } catch (e: Exception) {
-                                  startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                              }
-                          } else {
-                              requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE), 2)
-                          }
-                      }
-                      .create()
-                  d.show()
-                  themeDialog(d)
-              }
-
-              private var lockShown = false
-
-              private fun showLock(ui: View) {
-                  lockShown = true
-                  val et = field("TOKEN", false)
-                  et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                  val wrap = LinearLayout(this).apply {
-                      setPadding(dp(20), dp(8), dp(20), 0)
-                      addView(et, LinearLayout.LayoutParams(-1, -2))
-                  }
-                  val note = Lock.takeNote(this)
-                  val d = AlertDialog.Builder(this)
-                      .setTitle("RIZZXY STORE")
-                      .setMessage("Masukkan token akses (butuh internet). Cukup sekali selama token masih berlaku." +
-                          "\n\nID perangkat: " + Lock.deviceId(this) +
-                          (if (note.isNotEmpty()) "\n\n" + note else ""))
-                      .setView(wrap)
-                      .setCancelable(false)
-                      .setPositiveButton("MASUK", null)
-                      .setNegativeButton("KELUAR") { _, _ -> finish() }
-                      .create()
-                  d.show()
-                  themeDialog(d)
-                  val btn = d.getButton(AlertDialog.BUTTON_POSITIVE)
-                  btn.setOnClickListener {
-                      val token = et.text.toString().trim()
-                      if (token.isEmpty()) {
-                          et.error = "Isi token dulu"
-                      } else {
-                          btn.isEnabled = false
-                          btn.text = "MEMERIKSA…"
-                          Thread {
-                              val r = Lock.verify(this, token)
-                              runOnUiThread {
-                                  btn.isEnabled = true
-                                  btn.text = "MASUK"
-                                  if (r.ok) {
-                                      Lock.save(this, token, r.exp, r.id, r.name)
-                                      refreshProfile()
-                                      lockShown = false
-                                      ui.visibility = View.VISIBLE
-                                      d.dismiss()
-                                  } else {
-                                      et.setText("")
-                                      et.error = r.reason
-                                  }
-                              }
-                          }.start()
-                      }
-                  }
-                  // pulihkan token dari token_rizky (kalau device sama) lalu masuk otomatis
-                  if (!IdCfg.tried) {
-                      val saved = IdCfg.read(this)
-                      if (saved != null) {
-                          IdCfg.tried = true
-                          et.setText(saved)
-                          btn.performClick()
-                      }
-                  }
-              }
-
               override fun onDestroy() {
                   AdbHelper.onChange = null
                   videoBg?.release()
@@ -1171,21 +806,27 @@ jobs:
                   super.onDestroy()
               }
 
+              // jam dan baterai di profil diperbarui tiap 10 detik selama layar terbuka
+              private val tickH = android.os.Handler(android.os.Looper.getMainLooper())
+              private val tick = object : Runnable {
+                  override fun run() {
+                      refreshProfile()
+                      tickH.postDelayed(this, 10_000)
+                  }
+              }
+
               override fun onPause() {
+                  tickH.removeCallbacks(tick)
                   videoBg?.pausePlayback()
                   super.onPause()
               }
 
               override fun onResume() {
                   super.onResume()
-                  if (!lockShown && !Lock.isUnlocked(this)) {
-                      recreate()
-                      return
-                  }
-                  if (lockShown && !IdCfg.tried && IdCfg.read(this) != null) { recreate(); return }
-                  if (!lockShown) { Lock.revalidate(this) { runOnUiThread { recreate() } }; IdCfg.backup(this) }
                   videoBg?.resumePlayback()
                   refreshProfile()
+                  tickH.removeCallbacks(tick)
+                  tickH.postDelayed(tick, 10_000)
                   if (::banner.isInitialized) refresh()
               }
 
@@ -1421,10 +1062,13 @@ jobs:
                   val profCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
                   profName = tv("", 15f, white, true).apply { setSingleLine(); letterSpacing = 0.05f }
                   profDev = tv("", 10f, muted, true).apply { maxLines = 2 }
-                  profTok = tv("", 10f, cyan, true).apply { maxLines = 2 }
+                  profTok = tv("", 10f, muted, true).apply { setSingleLine() }
+                  profBat = tv("", 10f, cyan, true).apply { setSingleLine() }
+                  profDev.apply { setSingleLine() }
                   profCol.addView(profName)
-                  profCol.addView(profDev)
                   profCol.addView(profTok)
+                  profCol.addView(profDev)
+                  profCol.addView(profBat)
                   profRow.addView(profCol, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(12) })
                   headCard.addView(profRow, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(10) })
 
@@ -1686,8 +1330,9 @@ jobs:
               private fun refreshProfile(reloadImg: Boolean = false) {
                   if (!::profName.isInitialized) return
                   profName.text = Profile.name(this).uppercase()
-                  profDev.text = "Device Real : " + Profile.deviceReal() + " · ID DEVICE : " + Lock.deviceId(this)
-                  profTok.text = "ID TOKEN : " + Lock.tokenId(this) + " · EXP : " + Profile.expText(Lock.expMs(this))
+                  profTok.text = "Waktu : " + Profile.timeText()
+                  profDev.text = "Device : " + Profile.deviceText()
+                  profBat.text = "Batre : " + Profile.batteryText(this)
                   if (reloadImg) {
                       val bm = Profile.loadAvatar(this)
                       if (bm != null) profAvatar.setImageBitmap(bm) else profAvatar.setImageResource(R.mipmap.ic_launcher)
@@ -1807,7 +1452,7 @@ jobs:
                           d.dismiss()
                           Profile.clearAvatar(this); refreshProfile(true)
                       }, gap)
-                      box.addView(menuRow("Ubah nama", "Ganti nama yang tampil", white) {
+                      box.addView(menuRow("Ubah username", "Ganti username yang tampil", white) {
                           d.dismiss()
                           openNameDialog()
                       }, gap)
@@ -1822,8 +1467,8 @@ jobs:
               }
 
               private fun openNameDialog() {
-                  fancyDialog("UBAH NAMA", "NAMA YANG TAMPIL DI HOME", R.drawable.ic_settings) { box, d ->
-                      val et = field("NAMA", false)
+                  fancyDialog("UBAH USERNAME", "USERNAME YANG TAMPIL DI HOME", R.drawable.ic_settings) { box, d ->
+                      val et = field("USERNAME", false)
                       et.setText(Profile.name(this))
                       et.setSelection(et.text.length)
                       box.addView(et, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
@@ -4312,28 +3957,75 @@ jobs:
           import android.graphics.Bitmap
           import android.graphics.BitmapFactory
           import android.net.Uri
+          import android.content.Intent
+          import android.content.IntentFilter
+          import android.os.BatteryManager
           import android.os.Build
+          import java.util.TimeZone
           import java.io.File
           import java.io.FileOutputStream
           import java.text.SimpleDateFormat
           import java.util.Date
           import java.util.Locale
 
-          /** Profil di header: nama, gambar profil custom, info HP dan token. */
+          /** Profil di header: username, gambar profil custom, waktu, device asli, baterai. */
           object Profile {
               private fun sp(c: Context) = c.getSharedPreferences("profile", Context.MODE_PRIVATE)
 
               private fun avatarFile(c: Context) = File(c.filesDir, "avatar.png")
 
-              /** Nama buatan sendiri, kalau kosong pakai nama dari server, kalau kosong lagi "USER". */
+              /** Username buatan sendiri, kalau kosong "USER". */
               fun name(c: Context): String {
                   val own = sp(c).getString("name", "") ?: ""
-                  if (own.isNotBlank()) return own
-                  val srv = Lock.serverName(c)
-                  return if (srv.isNotBlank()) srv else "USER"
+                  return if (own.isNotBlank()) own else "USER"
               }
 
-              fun setName(c: Context, v: String) = sp(c).edit().putString("name", v.trim()).apply()
+              fun setName(c: Context, v: String) = sp(c).edit().putString("name", v.trim().take(24)).apply()
+
+              /** Deteksi emulator dari ciri bawaan sistem. */
+              fun isEmulator(): Boolean {
+                  val f = Build.FINGERPRINT ?: ""
+                  val m = Build.MODEL ?: ""
+                  val h = Build.HARDWARE ?: ""
+                  val p = Build.PRODUCT ?: ""
+                  return f.startsWith("generic") || f.startsWith("unknown") || f.contains("emulator") ||
+                      m.contains("Emulator") || m.contains("Android SDK built for") ||
+                      (Build.MANUFACTURER ?: "").contains("Genymotion") ||
+                      h.contains("goldfish") || h.contains("ranchu") ||
+                      p.contains("sdk_gphone") || p.contains("emulator") || p.contains("vbox")
+              }
+
+              /** "Asli · V2238" atau "Emulator · model". */
+              fun deviceText(): String = (if (isEmulator()) "Emulator" else "Asli") + " · " + deviceReal()
+
+              /** Label zona waktu: WIB / WITA / WIT, selain itu singkatan sistem (mis. SGT, GMT+8). */
+              fun zoneLabel(): String {
+                  val tz = TimeZone.getDefault()
+                  return when (tz.id) {
+                      "Asia/Jakarta", "Asia/Pontianak" -> "WIB"
+                      "Asia/Makassar" -> "WITA"
+                      "Asia/Jayapura" -> "WIT"
+                      else -> tz.getDisplayName(tz.inDaylightTime(Date()), TimeZone.SHORT, Locale("id", "ID"))
+                  }
+              }
+
+              /** "Min, 8 Nov · 21.45 WITA" mengikuti zona waktu HP. */
+              fun timeText(): String {
+                  val f = SimpleDateFormat("EEE, d MMM · HH.mm", Locale("id", "ID"))
+                  f.timeZone = TimeZone.getDefault()
+                  return f.format(Date()) + " " + zoneLabel()
+              }
+
+              /** "87%" atau "87% · mengisi". */
+              fun batteryText(c: Context): String {
+                  val i = c.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return "-"
+                  val lvl = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                  val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+                  if (lvl < 0 || scale <= 0) return "-"
+                  val st = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                  val chg = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
+                  return (lvl * 100 / scale).toString() + "%" + (if (chg) " · mengisi" else "")
+              }
 
               /** Model HP asli yang terdeteksi. */
               fun deviceReal(): String {
