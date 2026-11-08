@@ -61,6 +61,7 @@ jobs:
               // ADB nirkabel (pairing + koneksi TLS ke adbd di perangkat ini)
               implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
               implementation("org.conscrypt:conscrypt-android:2.5.3")
+              implementation("androidx.recyclerview:recyclerview:1.3.2")
               // membuat sertifikat X.509 untuk kunci ADB
               implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
               // tanda tangan ulang APK clone (v1+v2+v3)
@@ -108,6 +109,11 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+
+                  <activity
+                      android:name="com.rizzxy.store.HomeToggleSettingsActivity"
+                      android:exported="false"
+                      android:label="Pengaturan Home per Slot" />
 
                   <service
                       android:name=".RunService"
@@ -5332,16 +5338,19 @@ jobs:
           cat > "project/app/src/main/java/com/rizzxy/store/HomeToggleSettingsActivity.kt" <<'RZX_EOF'
           package com.rizzxy.store
 
+          import android.app.Activity
           import android.os.Bundle
-          import androidx.appcompat.app.AppCompatActivity
           import androidx.recyclerview.widget.LinearLayoutManager
           import androidx.recyclerview.widget.RecyclerView
 
           /**
            * Layar pengaturan: daftar semua slot (serve0..serveZ) dengan
            * toggle Home ON/OFF dan slider delay 1-10 detik per slot.
+           * Pakai Activity biasa (bukan AppCompatActivity) karena tema
+           * project ini turunan android:Theme.Material.NoActionBar,
+           * bukan Theme.AppCompat.
            */
-          class HomeToggleSettingsActivity : AppCompatActivity() {
+          class HomeToggleSettingsActivity : Activity() {
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
