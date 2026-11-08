@@ -5085,6 +5085,279 @@ jobs:
         run: |
           mkdir -p ~/.android
           echo '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' | base64 -d > ~/.android/debug.keystore
+      - name: Generate Home Toggle Feature
+        run: |
+          set -e
+          mkdir -p "project/app/src/main/java/com/rizzxy/store"
+          cat > "project/app/src/main/java/com/rizzxy/store/HomeToggleController.kt" <<'RZX_EOF'
+          package com.rizzxy.store
+
+          import android.content.Context
+          import android.content.SharedPreferences
+
+          /**
+           * HomeToggleController
+           * ---------------------
+           * Kontrol per-slot (per app/clone) untuk fitur:
+           *   1) homeEnabled -> apakah setelah dibuka, tombol Home otomatis ditekan
+           *      (slot diparkir ke background supaya tidak ikut ter-relog saat
+           *      slot lain dibuka).
+           *   2) delaySeconds -> berapa lama tunggu sebelum Home ditekan,
+           *      dibatasi 1-10 detik.
+           *
+           * Semua pengaturan disimpan persisten di SharedPreferences, jadi
+           * tetap kesimpan walau app di-restart.
+           */
+          class HomeToggleController(context: Context) {
+
+              private val prefs: SharedPreferences =
+                  context.getSharedPreferences("home_toggle_prefs", Context.MODE_PRIVATE)
+
+              companion object {
+                  private const val KEY_HOME_PREFIX = "home_enabled_"
+                  private const val KEY_DELAY_PREFIX = "home_delay_"
+                  const val MIN_DELAY = 1
+                  const val MAX_DELAY = 10
+                  const val DEFAULT_DELAY = 5
+              }
+
+              /** Set status ON/OFF tombol Home untuk satu slot (misal "serve0", "serve1", dst). */
+              fun setHomeEnabled(slotId: String, enabled: Boolean) {
+                  prefs.edit().putBoolean(KEY_HOME_PREFIX + slotId, enabled).apply()
+              }
+
+              /** Cek apakah Home aktif untuk slot ini. Default: aktif (true). */
+              fun isHomeEnabled(slotId: String): Boolean {
+                  return prefs.getBoolean(KEY_HOME_PREFIX + slotId, true)
+              }
+
+              /** Atur delay (detik) sebelum Home ditekan untuk slot ini, dipaksa ke rentang 1-10. */
+              fun setDelaySeconds(slotId: String, seconds: Int) {
+                  val clamped = seconds.coerceIn(MIN_DELAY, MAX_DELAY)
+                  prefs.edit().putInt(KEY_DELAY_PREFIX + slotId, clamped).apply()
+              }
+
+              /** Ambil delay (detik) untuk slot ini. Default: 5 detik. */
+              fun getDelaySeconds(slotId: String): Int {
+                  val value = prefs.getInt(KEY_DELAY_PREFIX + slotId, DEFAULT_DELAY)
+                  return value.coerceIn(MIN_DELAY, MAX_DELAY)
+              }
+
+              /** Ambil semua slot yang pernah dikonfigurasi, untuk ditampilkan di layar pengaturan. */
+              fun getAllConfiguredSlots(): List<String> {
+                  return prefs.all.keys
+                      .filter { it.startsWith(KEY_HOME_PREFIX) }
+                      .map { it.removePrefix(KEY_HOME_PREFIX) }
+                      .distinct()
+              }
+
+              /** Reset satu slot ke default (Home ON, delay 5 detik). */
+              fun resetSlot(slotId: String) {
+                  prefs.edit()
+                      .remove(KEY_HOME_PREFIX + slotId)
+                      .remove(KEY_DELAY_PREFIX + slotId)
+                      .apply()
+              }
+          }
+          RZX_EOF
+      - name: Generate Home Toggle UI
+        run: |
+          set -e
+          mkdir -p "project/app/src/main/res/layout"
+          mkdir -p "project/app/src/main/res/drawable"
+          mkdir -p "project/app/src/main/java/com/rizzxy/store"
+
+          cat > "project/app/src/main/res/layout/item_home_toggle_slot.xml" <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="vertical"
+              android:background="@drawable/bg_slot_card"
+              android:padding="14dp"
+              android:layout_marginHorizontal="12dp"
+              android:layout_marginVertical="6dp">
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal"
+                  android:gravity="center_vertical">
+
+                  <TextView
+                      android:id="@+id/tvSlotName"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="serve0"
+                      android:textSize="16sp"
+                      android:textStyle="bold"
+                      android:textColor="#FFFFFF" />
+
+                  <Switch
+                      android:id="@+id/switchHomeEnabled"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content" />
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/tvDelayLabel"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="8dp"
+                  android:text="Delay Home: 5 detik"
+                  android:textSize="13sp"
+                  android:textColor="#B0B0B0" />
+
+              <SeekBar
+                  android:id="@+id/seekBarDelay"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:max="9"
+                  android:progress="4" />
+
+          </LinearLayout>
+          RZX_EOF
+
+          cat > "project/app/src/main/res/drawable/bg_slot_card.xml" <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android">
+              <solid android:color="#1E1E1E" />
+              <corners android:radius="10dp" />
+          </shape>
+          RZX_EOF
+
+          cat > "project/app/src/main/res/layout/activity_home_toggle_settings.xml" <<'RZX_EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:background="#121212">
+
+              <TextView
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:padding="16dp"
+                  android:text="Pengaturan Home per Slot"
+                  android:textSize="18sp"
+                  android:textStyle="bold"
+                  android:textColor="#FFFFFF" />
+
+              <androidx.recyclerview.widget.RecyclerView
+                  android:id="@+id/rvSlots"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1" />
+
+          </LinearLayout>
+          RZX_EOF
+
+          cat > "project/app/src/main/java/com/rizzxy/store/HomeToggleAdapter.kt" <<'RZX_EOF'
+          package com.rizzxy.store
+
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.SeekBar
+          import android.widget.Switch
+          import android.widget.TextView
+          import androidx.recyclerview.widget.RecyclerView
+
+          /**
+           * Adapter RecyclerView untuk daftar slot (serve0..serveZ).
+           * Tiap item: nama slot, Switch Home ON/OFF, SeekBar delay 1-10 detik.
+           * Perubahan langsung disimpan lewat HomeToggleController.
+           */
+          class HomeToggleAdapter(
+              private val slots: List<String>,
+              private val controller: HomeToggleController
+          ) : RecyclerView.Adapter<HomeToggleAdapter.SlotViewHolder>() {
+
+              inner class SlotViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+                  val tvSlotName: TextView = view.findViewById(R.id.tvSlotName)
+                  val switchHome: Switch = view.findViewById(R.id.switchHomeEnabled)
+                  val tvDelayLabel: TextView = view.findViewById(R.id.tvDelayLabel)
+                  val seekBarDelay: SeekBar = view.findViewById(R.id.seekBarDelay)
+              }
+
+              override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SlotViewHolder {
+                  val view = LayoutInflater.from(parent.context)
+                      .inflate(R.layout.item_home_toggle_slot, parent, false)
+                  return SlotViewHolder(view)
+              }
+
+              override fun getItemCount(): Int = slots.size
+
+              override fun onBindViewHolder(holder: SlotViewHolder, position: Int) {
+                  val slotId = slots[position]
+
+                  holder.tvSlotName.text = slotId
+
+                  // Lepas listener lama dulu biar nggak ke-trigger pas set value awal
+                  holder.switchHome.setOnCheckedChangeListener(null)
+                  holder.seekBarDelay.setOnSeekBarChangeListener(null)
+
+                  val homeOn = controller.isHomeEnabled(slotId)
+                  val delay = controller.getDelaySeconds(slotId)
+
+                  holder.switchHome.isChecked = homeOn
+                  // SeekBar max=9 -> mewakili 1..10 detik (progress 0 = 1 detik)
+                  holder.seekBarDelay.progress = (delay - 1).coerceIn(0, 9)
+                  holder.tvDelayLabel.text = "Delay Home: ${delay} detik"
+                  holder.seekBarDelay.isEnabled = homeOn
+                  holder.tvDelayLabel.alpha = if (homeOn) 1.0f else 0.4f
+
+                  holder.switchHome.setOnCheckedChangeListener { _, isChecked ->
+                      controller.setHomeEnabled(slotId, isChecked)
+                      holder.seekBarDelay.isEnabled = isChecked
+                      holder.tvDelayLabel.alpha = if (isChecked) 1.0f else 0.4f
+                  }
+
+                  holder.seekBarDelay.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                          val seconds = progress + 1 // 1..10
+                          holder.tvDelayLabel.text = "Delay Home: ${seconds} detik"
+                          if (fromUser) {
+                              controller.setDelaySeconds(slotId, seconds)
+                          }
+                      }
+                      override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+                      override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                  })
+              }
+          }
+          RZX_EOF
+
+          cat > "project/app/src/main/java/com/rizzxy/store/HomeToggleSettingsActivity.kt" <<'RZX_EOF'
+          package com.rizzxy.store
+
+          import android.os.Bundle
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
+
+          /**
+           * Layar pengaturan: daftar semua slot (serve0..serveZ) dengan
+           * toggle Home ON/OFF dan slider delay 1-10 detik per slot.
+           */
+          class HomeToggleSettingsActivity : AppCompatActivity() {
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_home_toggle_settings)
+
+                  val controller = HomeToggleController(this)
+
+                  // Daftar slot default: serve0-serve9, servet-servez
+                  val defaultSlots = (0..9).map { "serve$it" } + listOf("t","u","v","w","x","y","z").map { "serve$it" }
+
+                  val rv = findViewById<RecyclerView>(R.id.rvSlots)
+                  rv.layoutManager = LinearLayoutManager(this)
+                  rv.adapter = HomeToggleAdapter(defaultSlots, controller)
+              }
+          }
+          RZX_EOF
       - name: Build
         working-directory: project
         run: gradle assembleDebug
