@@ -105,17 +105,18 @@ jobs:
           package id.anichin.app;
 
           import android.app.Activity;
+          import android.content.SharedPreferences;
           import android.content.pm.ActivityInfo;
           import android.content.res.ColorStateList;
           import android.graphics.Bitmap;
           import android.graphics.Color;
           import android.graphics.drawable.GradientDrawable;
-          import android.view.Gravity;
-          import android.widget.ImageButton;
           import android.os.Bundle;
+          import android.view.Gravity;
           import android.view.KeyEvent;
+          import android.view.MotionEvent;
           import android.view.View;
-          import android.view.ViewGroup;
+          import android.view.ViewConfiguration;
           import android.webkit.CookieManager;
           import android.webkit.WebChromeClient;
           import android.webkit.WebResourceRequest;
@@ -123,46 +124,43 @@ jobs:
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
           import android.widget.FrameLayout;
+          import android.widget.ImageButton;
           import android.widget.ProgressBar;
 
           public class MainActivity extends Activity {
               private static final String URL = "__URL__";
               private WebView web;
               private ProgressBar bar;
-              private ImageButton rotateBtn;
-              private boolean landscape = false;
               private FrameLayout root;
+              private ImageButton rotateBtn, fsBtn;
+              private SharedPreferences prefs;
+              private float density;
+              private boolean landscape = false;
+              private boolean fullscreen = false;
               private View customView;
               private WebChromeClient.CustomViewCallback customCallback;
 
               @Override
-              protected void onCreate(Bundle b) {
-                  super.onCreate(b);
+              protected void onCreate(Bundle saved) {
+                  super.onCreate(saved);
+                  density = getResources().getDisplayMetrics().density;
+                  prefs = getSharedPreferences("ui", MODE_PRIVATE);
+
                   root = new FrameLayout(this);
                   web = new WebView(this);
-                  float d = getResources().getDisplayMetrics().density;
                   root.addView(web, new FrameLayout.LayoutParams(-1, -1));
 
                   bar = new ProgressBar(this);
                   bar.setIndeterminateTintList(ColorStateList.valueOf(Color.parseColor("#1E88E5")));
-                  root.addView(bar, new FrameLayout.LayoutParams((int) (48 * d), (int) (48 * d), Gravity.CENTER));
+                  root.addView(bar, new FrameLayout.LayoutParams((int) (48 * density), (int) (48 * density), Gravity.CENTER));
 
-                  rotateBtn = new ImageButton(this);
-                  GradientDrawable bg = new GradientDrawable();
-                  bg.setShape(GradientDrawable.OVAL);
-                  bg.setColor(Color.parseColor("#CC1E88E5"));
-                  rotateBtn.setBackground(bg);
-                  rotateBtn.setImageResource(android.R.drawable.ic_menu_rotate);
-                  rotateBtn.setColorFilter(Color.WHITE);
-                  FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams((int) (48 * d), (int) (48 * d), Gravity.BOTTOM | Gravity.END);
-                  lp.setMargins(0, 0, (int) (16 * d), (int) (80 * d));
-                  root.addView(rotateBtn, lp);
-                  rotateBtn.setOnClickListener(v -> {
+                  rotateBtn = makeFab(android.R.drawable.ic_menu_rotate, "rot", 0.97f, 0.78f, () -> {
                       landscape = !landscape;
                       setRequestedOrientation(landscape
                           ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                           : ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
                   });
+                  fsBtn = makeFab(android.R.drawable.ic_menu_view, "fs", 0.97f, 0.62f, this::toggleFullscreen);
 
                   setContentView(root);
 
@@ -180,8 +178,7 @@ jobs:
                       @Override
                       public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                           String u = r.getUrl().toString();
-                          if (u.startsWith("http://") || u.startsWith("https://")) return false;
-                          return true;
+                          return !(u.startsWith("http://") || u.startsWith("https://"));
                       }
                       @Override
                       public void onPageStarted(WebView v, String u, Bitmap f) { bar.setVisibility(View.VISIBLE); }
@@ -198,9 +195,8 @@ jobs:
                           web.setVisibility(View.GONE);
                           root.addView(view, new FrameLayout.LayoutParams(-1, -1));
                           rotateBtn.bringToFront();
-                          getWindow().getDecorView().setSystemUiVisibility(
-                              View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                              | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+                          fsBtn.bringToFront();
+                          applyImmersive(true);
                       }
                       @Override
                       public void onHideCustomView() {
@@ -209,11 +205,98 @@ jobs:
                           customView = null;
                           if (customCallback != null) customCallback.onCustomViewHidden();
                           web.setVisibility(View.VISIBLE);
-                          getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                          applyImmersive(fullscreen);
                       }
                   });
 
-                  if (b != null) web.restoreState(b); else web.loadUrl(URL);
+                  if (saved != null) web.restoreState(saved); else web.loadUrl(URL);
+              }
+
+              // Tombol melayang yang bisa digeser (posisi tersimpan)
+              private ImageButton makeFab(int icon, final String key, final float defX, final float defY, final Runnable click) {
+                  final ImageButton btn = new ImageButton(this);
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setShape(GradientDrawable.OVAL);
+                  bg.setColor(Color.parseColor("#CC1E88E5"));
+                  btn.setBackground(bg);
+                  btn.setImageResource(icon);
+                  btn.setColorFilter(Color.WHITE);
+                  btn.setAlpha(0.75f);
+                  int size = (int) (44 * density);
+                  root.addView(btn, new FrameLayout.LayoutParams(size, size, Gravity.TOP | Gravity.START));
+                  makeDraggable(btn, key, click);
+                  root.addOnLayoutChangeListener((vw, l1, t1, r1, b1, l2, t2, r2, b2) -> applyPos(btn, key, defX, defY));
+                  return btn;
+              }
+
+              private void applyPos(View v, String key, float defX, float defY) {
+                  float maxX = Math.max(0, root.getWidth() - v.getWidth());
+                  float maxY = Math.max(0, root.getHeight() - v.getHeight());
+                  v.setX(prefs.getFloat(key + "_x", defX) * maxX);
+                  v.setY(prefs.getFloat(key + "_y", defY) * maxY);
+              }
+
+              private void makeDraggable(View v, final String key, final Runnable click) {
+                  final int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+                  v.setOnTouchListener(new View.OnTouchListener() {
+                      float offX, offY, startX, startY;
+                      boolean moved;
+                      @Override
+                      public boolean onTouch(View view, MotionEvent e) {
+                          switch (e.getActionMasked()) {
+                              case MotionEvent.ACTION_DOWN:
+                                  offX = view.getX() - e.getRawX();
+                                  offY = view.getY() - e.getRawY();
+                                  startX = e.getRawX();
+                                  startY = e.getRawY();
+                                  moved = false;
+                                  return true;
+                              case MotionEvent.ACTION_MOVE:
+                                  if (!moved && Math.hypot(e.getRawX() - startX, e.getRawY() - startY) > slop) moved = true;
+                                  if (moved) {
+                                      float maxX = Math.max(0, root.getWidth() - view.getWidth());
+                                      float maxY = Math.max(0, root.getHeight() - view.getHeight());
+                                      view.setX(Math.min(maxX, Math.max(0, e.getRawX() + offX)));
+                                      view.setY(Math.min(maxY, Math.max(0, e.getRawY() + offY)));
+                                  }
+                                  return true;
+                              case MotionEvent.ACTION_UP:
+                                  if (moved) {
+                                      float maxX = Math.max(1, root.getWidth() - view.getWidth());
+                                      float maxY = Math.max(1, root.getHeight() - view.getHeight());
+                                      prefs.edit()
+                                          .putFloat(key + "_x", view.getX() / maxX)
+                                          .putFloat(key + "_y", view.getY() / maxY)
+                                          .apply();
+                                  } else {
+                                      click.run();
+                                  }
+                                  return true;
+                          }
+                          return false;
+                      }
+                  });
+              }
+
+              private void applyImmersive(boolean on) {
+                  getWindow().getDecorView().setSystemUiVisibility(on
+                      ? (View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+                      : View.SYSTEM_UI_FLAG_VISIBLE);
+              }
+
+              private void toggleFullscreen() {
+                  fullscreen = !fullscreen;
+                  applyImmersive(fullscreen);
+                  fsBtn.setImageResource(fullscreen
+                      ? android.R.drawable.ic_menu_close_clear_cancel
+                      : android.R.drawable.ic_menu_view);
+              }
+
+              @Override
+              public void onWindowFocusChanged(boolean hasFocus) {
+                  super.onWindowFocusChanged(hasFocus);
+                  if (hasFocus) applyImmersive(fullscreen || customView != null);
               }
 
               @Override
