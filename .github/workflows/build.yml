@@ -83,9 +83,10 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <application
                   android:label="__NAME__"
-                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true"
                   android:hardwareAccelerated="true"
+                android:largeHeap="true"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
                   <activity
                       android:name=".MainActivity"
@@ -101,6 +102,69 @@ jobs:
           </manifest>
           EOF
 
+          mkdir -p app/src/main/res/mipmap-anydpi app/src/main/res/mipmap-anydpi-v26 app/src/main/res/drawable app/src/main/res/values
+
+          cat > app/src/main/res/values/colors.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_red">#E53935</color>
+              <color name="ic_yellow">#FFD600</color>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/drawable/ic_launcher_fg.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path
+                  android:pathData="M36,76 L54,32 L72,76"
+                  android:fillColor="#00000000"
+                  android:strokeColor="#FFD600"
+                  android:strokeWidth="9"
+                  android:strokeLineCap="round"
+                  android:strokeLineJoin="miter" />
+              <path
+                  android:pathData="M43,64 L65,64"
+                  android:fillColor="#00000000"
+                  android:strokeColor="#FFD600"
+                  android:strokeWidth="9"
+                  android:strokeLineCap="round" />
+          </vector>
+          EOF
+
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_red" />
+              <foreground android:drawable="@drawable/ic_launcher_fg" />
+          </adaptive-icon>
+          EOF
+
+          cat > app/src/main/res/mipmap-anydpi/ic_launcher.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path
+                  android:pathData="M24,6 L84,6 Q102,6 102,24 L102,84 Q102,102 84,102 L24,102 Q6,102 6,84 L6,24 Q6,6 24,6 Z"
+                  android:fillColor="#E53935" />
+              <path
+                  android:pathData="M36,76 L54,32 L72,76"
+                  android:fillColor="#00000000"
+                  android:strokeColor="#FFD600"
+                  android:strokeWidth="9"
+                  android:strokeLineCap="round"
+                  android:strokeLineJoin="miter" />
+              <path
+                  android:pathData="M43,64 L65,64"
+                  android:fillColor="#00000000"
+                  android:strokeColor="#FFD600"
+                  android:strokeWidth="9"
+                  android:strokeLineCap="round" />
+          </vector>
+          EOF
+
           cat > app/src/main/java/id/anichin/app/MainActivity.java << 'EOF'
           package id.anichin.app;
 
@@ -111,12 +175,20 @@ jobs:
           import android.graphics.Bitmap;
           import android.graphics.Color;
           import android.graphics.drawable.GradientDrawable;
+          import android.content.res.Configuration;
+          import android.graphics.drawable.ColorDrawable;
+          import android.os.Build;
           import android.os.Bundle;
+          import android.view.Display;
           import android.view.Gravity;
           import android.view.KeyEvent;
           import android.view.MotionEvent;
           import android.view.View;
           import android.view.ViewConfiguration;
+          import android.view.Window;
+          import android.view.WindowInsets;
+          import android.view.WindowInsetsController;
+          import android.view.WindowManager;
           import android.webkit.CookieManager;
           import android.webkit.WebChromeClient;
           import android.webkit.WebResourceRequest;
@@ -129,6 +201,12 @@ jobs:
 
           public class MainActivity extends Activity {
               private static final String URL = "__URL__";
+              private static final String FAST_CSS =
+                  "(function(){if(document.getElementById('__fast'))return;"
+                  + "var s=document.createElement('style');s.id='__fast';"
+                  + "s.textContent='*{transition-duration:.1s !important;transition-delay:0s !important;"
+                  + "scroll-behavior:auto !important}';"
+                  + "(document.head||document.documentElement).appendChild(s);})();";
               private WebView web;
               private ProgressBar bar;
               private FrameLayout root;
@@ -145,6 +223,10 @@ jobs:
                   super.onCreate(saved);
                   density = getResources().getDisplayMetrics().density;
                   prefs = getSharedPreferences("ui", MODE_PRIVATE);
+                  getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+                  getWindow().setStatusBarColor(Color.BLACK);
+                  getWindow().setNavigationBarColor(Color.BLACK);
+                  maxRefreshRate();
 
                   root = new FrameLayout(this);
                   web = new WebView(this);
@@ -171,6 +253,11 @@ jobs:
                   s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
                   s.setLoadWithOverviewMode(true);
                   s.setUseWideViewPort(true);
+                  s.setCacheMode(WebSettings.LOAD_DEFAULT);
+                  s.setDatabaseEnabled(true);
+                  s.setOffscreenPreRaster(true);
+                  web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+                  web.setOverScrollMode(View.OVER_SCROLL_NEVER);
                   CookieManager.getInstance().setAcceptCookie(true);
                   CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
@@ -183,7 +270,10 @@ jobs:
                       @Override
                       public void onPageStarted(WebView v, String u, Bitmap f) { bar.setVisibility(View.VISIBLE); }
                       @Override
-                      public void onPageFinished(WebView v, String u) { bar.setVisibility(View.GONE); }
+                      public void onPageFinished(WebView v, String u) {
+                          bar.setVisibility(View.GONE);
+                          v.evaluateJavascript(FAST_CSS, null);
+                      }
                   });
 
                   web.setWebChromeClient(new WebChromeClient() {
@@ -210,6 +300,27 @@ jobs:
                   });
 
                   if (saved != null) web.restoreState(saved); else web.loadUrl(URL);
+
+                  root.post(() -> setFullscreen(
+                      getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE));
+              }
+
+              // Pakai refresh rate tertinggi layar (90/120Hz) biar animasi mulus
+              private void maxRefreshRate() {
+                  if (Build.VERSION.SDK_INT < 23) return;
+                  try {
+                      Display d = getWindowManager().getDefaultDisplay();
+                      Display.Mode cur = d.getMode();
+                      Display.Mode best = cur;
+                      for (Display.Mode m : d.getSupportedModes()) {
+                          if (m.getPhysicalWidth() == cur.getPhysicalWidth()
+                              && m.getPhysicalHeight() == cur.getPhysicalHeight()
+                              && m.getRefreshRate() > best.getRefreshRate()) best = m;
+                      }
+                      WindowManager.LayoutParams lp = getWindow().getAttributes();
+                      lp.preferredDisplayModeId = best.getModeId();
+                      getWindow().setAttributes(lp);
+                  } catch (Exception ignored) { }
               }
 
               // Tombol melayang yang bisa digeser (posisi tersimpan)
@@ -278,19 +389,51 @@ jobs:
                   });
               }
 
+              @SuppressWarnings("deprecation")
               private void applyImmersive(boolean on) {
-                  getWindow().getDecorView().setSystemUiVisibility(on
-                      ? (View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
-                      : View.SYSTEM_UI_FLAG_VISIBLE);
+                  Window w = getWindow();
+                  if (Build.VERSION.SDK_INT >= 28) {
+                      WindowManager.LayoutParams lp = w.getAttributes();
+                      lp.layoutInDisplayCutoutMode = on
+                          ? WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                          : WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
+                      w.setAttributes(lp);
+                  }
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      w.setDecorFitsSystemWindows(!on);
+                      WindowInsetsController c = w.getInsetsController();
+                      if (c != null) {
+                          if (on) {
+                              c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                              c.hide(WindowInsets.Type.systemBars());
+                          } else {
+                              c.show(WindowInsets.Type.systemBars());
+                          }
+                      }
+                  } else {
+                      w.getDecorView().setSystemUiVisibility(on
+                          ? (View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                             | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+                          : View.SYSTEM_UI_FLAG_VISIBLE);
+                  }
               }
 
-              private void toggleFullscreen() {
-                  fullscreen = !fullscreen;
-                  applyImmersive(fullscreen);
-                  fsBtn.setImageResource(fullscreen
+              private void setFullscreen(boolean on) {
+                  fullscreen = on;
+                  applyImmersive(on);
+                  fsBtn.setImageResource(on
                       ? android.R.drawable.ic_menu_close_clear_cancel
                       : android.R.drawable.ic_menu_view);
+              }
+
+              private void toggleFullscreen() { setFullscreen(!fullscreen); }
+
+              // Otomatis full layar saat landscape, normal saat portrait
+              @Override
+              public void onConfigurationChanged(Configuration newConfig) {
+                  super.onConfigurationChanged(newConfig);
+                  setFullscreen(newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE);
               }
 
               @Override
